@@ -3060,6 +3060,47 @@ void fabrik_t::info_prod(cbuffer_t& buf) const
 			}
 		}
 	}
+	// Power stations: a small read-only summary of electricity output. Every value
+	// is taken straight from existing runtime state; the simulation is untouched.
+	//   get_power()        - power the grid actually draws from this plant now
+	//   get_power_supply() - capacity the plant offers to the grid now, already
+	//                        scaled by the current production level and any boost
+	// get_power() == supply * normalised-demand >> 16, so output <= capacity always,
+	// and output/capacity is exactly the grid's normalised demand (0..100%).
+	if(  desc->is_electricity_producer()  ) {
+		const sint64 output   = get_power();            // drawn by the grid
+		const sint64 capacity = get_power_supply();     // offered to the grid now
+		const sint64 last     = get_stat(1, FAB_POWER); // previous month's average
+
+		buf.append("\n\n");
+		buf.append( translator::translate("Electricity production") );
+		buf.printf( "\n - %s: %d MW", translator::translate("Current output"), (int)convert_power(output) );
+		buf.printf( "\n - %s: %d MW", translator::translate("Available output"), (int)convert_power(capacity) );
+		if(  capacity > 0  ) {
+			// output and capacity are sint64 in internal power units (<= max_capacity,
+			// ~1.6e10), so output*100 stays far below INT64_MAX; the result is 0..100.
+			buf.printf( "\n - %s: %d%%", translator::translate("Grid demand"), (int)(output * 100 / capacity) );
+		}
+		buf.printf( "\n - %s: %d MW", translator::translate("Last month"), (int)convert_power(last) );
+
+		// Only states that map reliably to the verified values; the figures carry the rest.
+		const char *status;
+		if(  !is_transformer_connected()  ) {
+			status = "Not connected to a power line";     // no transformer at all
+		}
+		else if(  capacity <= 0  ) {
+			status = "No production available";            // plant offers no capacity
+		}
+		else if(  output <= 0  ) {
+			status = "No power delivered";                 // capacity offered, grid draws none
+		}
+		else {
+			status = "In operation";
+		}
+		// A dedicated key: the generic "Status" key is translated in a stops-only
+		// context (e.g. es: "Estado de las paradas"), which is wrong for a factory.
+		buf.printf( "\n - %s: %s", translator::translate("Power status"), translator::translate(status) );
+	}
 }
 
 

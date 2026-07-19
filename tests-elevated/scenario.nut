@@ -41,8 +41,12 @@ function find_city_buildings()
 
 function pick_elevated_way()
 {
-    local ways = way_desc_x.get_available_ways(wt_road, st_elevated)
-    print("SPIKE-SCEN: " + ways.len() + " elevated road type(s) available")
+    // Which waytype to put overhead. get_weg_nr(0) is waytype-agnostic, so the
+    // fix should behave identically for rail, monorail and maglev - assert that
+    // by actually running them rather than by reading the accessor.
+    local wt = getenv("SPIKE_WAYTYPE") == "rail" ? wt_rail : wt_road
+    local ways = way_desc_x.get_available_ways(wt, st_elevated)
+    print("SPIKE-SCEN: " + ways.len() + " elevated way(s) of the chosen type")
     foreach (w in ways) {
         print("SPIKE-SCEN:   " + w.get_name())
     }

@@ -3505,11 +3505,32 @@ bool stadt_t::renovate_city_building(gebaeude_t *gb)
 	building_desc_t::btype want_to_have = building_desc_t::unknown;
 	int sum = 0;
 
+	// An elevated way over this tile is only there because the building below
+	// was short enough to allow it (way_builder_t::is_allowed_step). Renovating
+	// into something taller would produce a building the player could never
+	// have built the way over, so the replacement has to pass the same test.
+	// If nothing does, no renovation happens and the block simply stops growing
+	// upwards, which is the intended ceiling rather than a failure.
+	//
+	// monorailboden only, which is the elevated-way ground - any waytype, so
+	// elevated rail, monorail, maglev and tram are all covered. NOT
+	// brueckenboden: the bridge builder never tested building height, so tall
+	// buildings under a bridge have always been legal and the argument above
+	// does not apply to them. Changing that would be a separate decision.
+	bool no_upper_storey = false;
+	if(  const grund_t *gr_here = welt->lookup_kartenboden(k)  ) {
+		const grund_t *above = welt->lookup(gr_here->get_pos()
+			+ koord3d(0, 0, welt->get_settings().get_way_height_clearance()));
+		no_upper_storey = above
+			&&  above->get_typ() == grund_t::monorailboden
+			&&  above->get_weg_nr(0) != NULL;
+	}
+
 	// try to build
 	const building_desc_t* h = NULL;
 	if (sum_commercial > sum_industrial && sum_commercial > sum_residential) {
 		// we must check, if we can really update to higher level ...
-		h = hausbauer_t::get_commercial(level+1, current_month, cl, neighbor_building_clusters, 1, max_area, &exclude_desc);
+		h = hausbauer_t::get_commercial(level+1, current_month, cl, neighbor_building_clusters, 1, max_area, &exclude_desc, no_upper_storey);
 		if(  h != NULL  &&  h->get_level() >= level+1  ) {
 			want_to_have = building_desc_t::city_com;
 			sum = sum_commercial;
@@ -3519,7 +3540,7 @@ bool stadt_t::renovate_city_building(gebaeude_t *gb)
 	if(    (sum_industrial > sum_commercial  &&  sum_industrial > sum_residential) ||
 	       (sum_commercial > sum_residential  &&  want_to_have == building_desc_t::unknown)  ) {
 		// we must check, if we can really update to higher level ...
-		h = hausbauer_t::get_industrial(level+1 , current_month, cl, neighbor_building_clusters, 1, max_area, &exclude_desc);
+		h = hausbauer_t::get_industrial(level+1, current_month, cl, neighbor_building_clusters, 1, max_area, &exclude_desc, no_upper_storey);
 		if(  h != NULL  &&  h->get_level() >= level+1  ) {
 			want_to_have = building_desc_t::city_ind;
 			sum = sum_industrial;
@@ -3529,7 +3550,7 @@ bool stadt_t::renovate_city_building(gebaeude_t *gb)
 	// (sum_wohnung>sum_industrie  &&  sum_wohnung>sum_gewerbe
 	if(  want_to_have == building_desc_t::unknown  ) {
 		// we must check, if we can really update to higher level ...
-		h = hausbauer_t::get_residential(level+1, current_month, cl, neighbor_building_clusters, 1, max_area, &exclude_desc);
+		h = hausbauer_t::get_residential(level+1, current_month, cl, neighbor_building_clusters, 1, max_area, &exclude_desc, no_upper_storey);
 		if(  h != NULL  &&  h->get_level() >= level+1  ) {
 			want_to_have = building_desc_t::city_res;
 			sum = sum_residential;
@@ -3583,38 +3604,6 @@ bool stadt_t::renovate_city_building(gebaeude_t *gb)
 			// 1x1 house but origin moved => move back
 			k = base_pos.get_2d();
 		}
-
-		// --- SPIKE INSTRUMENTATION, not for upstream -----------------------
-		// Forum 23991 (makie): an elevated way refuses to be built over a tall
-		// building, but renovation happily grows a short one into a tall one
-		// underneath an existing elevated way.
-		//
-		// wegbauer.cc:609 decides "too tall" with
-		//     gb->get_tile()->get_background(0,1,0) != IMG_EMPTY
-		// i.e. does the building draw anything at HEIGHT 1. Apply the very same
-		// predicate to the REPLACEMENT, and report when it would be accepted on
-		// a tile that has something above it. If this never fires, the report is
-		// wrong or reaches the building by some other path.
-		{
-			const grund_t *sp_gr = welt->lookup_kartenboden(k);
-			const grund_t *sp_above = sp_gr
-				? welt->lookup(sp_gr->get_pos()
-					+ koord3d(0, 0, welt->get_settings().get_way_height_clearance()))
-				: NULL;
-			if(  sp_above  &&  sp_above->get_weg_nr(0)  ) {
-				const building_tile_desc_t *sp_tile = h->get_tile(0);
-				const bool sp_tall = sp_tile
-					&&  sp_tile->get_background(0, 1, 0) != IMG_EMPTY;
-				dbg->message("SPIKE-RENOVATE",
-					"%s at %s: replacement '%s' level %i, draws_at_height_1=%s"
-					"  <-- elevated %s overhead",
-					sp_tall ? "TALL UNDER ELEVATED" : "ok",
-					k.get_str(), h->get_name(), h->get_level(),
-					sp_tall ? "YES" : "no",
-					sp_above->get_weg_nr(0)->get_name());
-			}
-		}
-		// --- END SPIKE -----------------------------------------------------
 
 		int rotation2 = orient_city_building(k, h, max_size);
 		const gebaeude_t *gb= build_city_house(koord3d(k, base_pos.z), h, rotation2, cl, &exclude_desc);

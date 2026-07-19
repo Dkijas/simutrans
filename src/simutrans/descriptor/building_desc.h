@@ -50,6 +50,15 @@ public:
 		return get_background(0,0,0)!=IMG_EMPTY  ||  get_foreground(0,0)!=IMG_EMPTY;
 	}
 
+	/**
+	 * Does this tile draw anything above the ground storey?
+	 * This is the test that decides whether an elevated way may pass over the
+	 * building, so it lives here rather than being spelled out at each use.
+	 */
+	bool has_upper_storey() const {
+		return get_background(0, 1, 0) != IMG_EMPTY;
+	}
+
 	image_id get_background(uint16 phase, uint16 height, uint8 season) const
 	{
 		image_array_t const* const imglist = get_child<image_array_t>(0 + 2 * season);
@@ -286,6 +295,21 @@ public:
 	}
 
 	const building_tile_desc_t *get_tile(uint8 layout, sint16 x, sint16 y) const;
+
+	/**
+	 * Does any tile of this building draw above the ground storey?
+	 * An elevated way cannot pass over such a building (see way_builder_t),
+	 * so a replacement chosen for a spot that already has one overhead must
+	 * not have an upper storey either.
+	 */
+	bool has_upper_storey() const {
+		for(  uint16 i = 0;  i < layouts * size.x * size.y;  i++  ) {
+			if(  get_tile(i)->has_upper_storey()  ) {
+				return true;
+			}
+		}
+		return false;
+	}
 
 	// returns true,if building can be rotated
 	bool can_rotate() const {

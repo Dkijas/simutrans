@@ -886,7 +886,7 @@ const building_desc_t* hausbauer_t::get_special(uint32 bev, building_desc_t::bty
  * @param start_level the minimum level of the house/station
  * @param cl allowed climates
  */
-static const building_desc_t* get_city_building_from_list(const vector_tpl<const building_desc_t*>& list, int start_level, uint16 time, climate cl, uint32 clusters, sint16 minsize, sint16 maxsize, vector_tpl<const building_desc_t*>* exclude )
+static const building_desc_t* get_city_building_from_list(const vector_tpl<const building_desc_t*>& list, int start_level, uint16 time, climate cl, uint32 clusters, sint16 minsize, sint16 maxsize, vector_tpl<const building_desc_t*>* exclude, bool no_upper_storey )
 {
 	weighted_vector_tpl<const building_desc_t *> selections(16);
 	int level = start_level;
@@ -910,7 +910,11 @@ static const building_desc_t* get_city_building_from_list(const vector_tpl<const
 		     desc->is_available(time)  &&
 		     // size check
 			(desc->get_area()>=minsize  &&  desc->get_area() <= maxsize)  &&
-			(!exclude  ||  !exclude->is_contained(desc))
+			(!exclude  ||  !exclude->is_contained(desc))  &&
+			// an elevated way overhead: the replacement must fit under it, by
+			// the same test that stopped the way being built over a tall
+			// building in the first place (way_builder_t::is_allowed_step)
+			(!no_upper_storey  ||  !desc->has_upper_storey())
 		) {
 			desc_at_least = desc;
 			if( thislevel == level ) {
@@ -946,21 +950,21 @@ static const building_desc_t* get_city_building_from_list(const vector_tpl<const
 }
 
 
-const building_desc_t* hausbauer_t::get_commercial(int level, uint16 time, climate cl, uint32 clusters, sint16 minsize, sint16 maxsize, vector_tpl<const building_desc_t*>* exclude)
+const building_desc_t* hausbauer_t::get_commercial(int level, uint16 time, climate cl, uint32 clusters, sint16 minsize, sint16 maxsize, vector_tpl<const building_desc_t*>* exclude, bool no_upper_storey)
 {
-	return get_city_building_from_list(city_commercial, level, time, cl, clusters, minsize, maxsize, exclude );
+	return get_city_building_from_list(city_commercial, level, time, cl, clusters, minsize, maxsize, exclude, no_upper_storey );
 }
 
 
-const building_desc_t* hausbauer_t::get_industrial(int level, uint16 time, climate cl, uint32 clusters, sint16 minsize, sint16 maxsize, vector_tpl<const building_desc_t*>* exclude)
+const building_desc_t* hausbauer_t::get_industrial(int level, uint16 time, climate cl, uint32 clusters, sint16 minsize, sint16 maxsize, vector_tpl<const building_desc_t*>* exclude, bool no_upper_storey)
 {
-	return get_city_building_from_list(city_industry, level, time, cl, clusters, minsize, maxsize, exclude );
+	return get_city_building_from_list(city_industry, level, time, cl, clusters, minsize, maxsize, exclude, no_upper_storey );
 }
 
 
-const building_desc_t* hausbauer_t::get_residential(int level, uint16 time, climate cl, uint32 clusters, sint16 minsize, sint16 maxsize, vector_tpl<const building_desc_t*> *exclude)
+const building_desc_t* hausbauer_t::get_residential(int level, uint16 time, climate cl, uint32 clusters, sint16 minsize, sint16 maxsize, vector_tpl<const building_desc_t*> *exclude, bool no_upper_storey)
 {
-	return get_city_building_from_list(city_residential, level, time, cl, clusters, minsize, maxsize, exclude );
+	return get_city_building_from_list(city_residential, level, time, cl, clusters, minsize, maxsize, exclude, no_upper_storey );
 }
 
 

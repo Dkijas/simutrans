@@ -73,7 +73,19 @@ void signal_t::calc_image()
 			// get_phase_stride() divides get_count() by the phase count, which is
 			// why the electrified test above had to be divided too -- get_count()
 			// is used as a heuristic in two places and both move together.
-			offset += anim_frame * desc->get_phase_stride();
+			//
+			// Guard the multiply on the phase count. get_phase_stride() returns
+			// get_count() when phases == 1, so a non-zero anim_frame on a
+			// one-phase sign indexes past the END of the image list, every
+			// lookup returns IMG_EMPTY, and the signal vanishes and reappears as
+			// the counter wraps. Caught on screen during the worst-case run --
+			// it is invisible in the log, which reports timings and never says
+			// an image was missing. Relying on "anim_frame is always 0 when
+			// phases == 1" is an unwritten invariant of exactly the kind this
+			// work is meant to remove.
+			if(  desc->get_phases() > 1  ) {
+				offset += anim_frame * desc->get_phase_stride();
+			}
 
 			// vertical offset of the signal positions
 			if(full_hang==slope_t::flat) {

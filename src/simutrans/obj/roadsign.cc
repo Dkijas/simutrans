@@ -37,6 +37,22 @@
 
 #include "roadsign.h"
 
+// --- SPIKE: worst-case switch, not for upstream --------------------------
+// With SPIKE_FORCE_ANIM=1 in the environment, EVERY signal joins the sync list
+// regardless of what its pakset says. That is the opposite of the opt-in design
+// and is the upper bound the design argument needs. One binary, both arms of
+// the experiment, so the two runs cannot differ by a stray recompile.
+static bool spike_force_register()
+{
+	static int cached = -1;
+	if(  cached < 0  ) {
+		const char *e = getenv("SPIKE_FORCE_ANIM");
+		cached = (e  &&  *e  &&  *e != '0') ? 1 : 0;
+	}
+	return cached != 0;
+}
+// --- END SPIKE -----------------------------------------------------------
+
 freelist_tpl<roadsign_t> roadsign_t::rs;
 
 const roadsign_desc_t *roadsign_t::default_signal=NULL;
@@ -48,6 +64,7 @@ roadsign_t::roadsign_t(loadsave_t *file) : obj_t ()
 {
 	image = foreground_image = IMG_EMPTY;
 	preview = false;
+	in_sync_list = 0; // SPIKE: bitfields are not zero-initialised.
 	rdwr(file);
 	if(desc) {
 		/* if more than one state, we will switch direction and phase for traffic lights
@@ -63,9 +80,12 @@ roadsign_t::roadsign_t(loadsave_t *file) : obj_t ()
 		state = 0;
 	}
 	// only traffic light need switches
-	// MVP SPIKE: ... and anything the pakset marked as animated.
-	if(  automatic  ||  (desc  &&  desc->is_animated())  ) {
+	// MVP SPIKE: ... and anything the pakset marked as animated, plus - under
+	// SPIKE_FORCE_ANIM - every signal, to measure the worst case.
+	if(  automatic  ||  (desc  &&  desc->is_animated())
+	     ||  (spike_force_register()  &&  desc  &&  desc->is_signal_type())  ) {
 		welt->sync_roadsigns.add(this);
+		in_sync_list = 1;
 		// Stagger the start, or every sign of the same type blinks in unison.
 		if(  desc  &&  desc->is_animated()  ) {
 			anim_frame = sim_async_rand( desc->get_phases() );
@@ -79,6 +99,7 @@ roadsign_t::roadsign_t(player_t *player, koord3d pos, ribi_t::ribi dir, const ro
 	this->desc = desc;
 	this->dir = dir;
 	this->preview = preview;
+	in_sync_list = 0; // SPIKE: bitfields are not zero-initialised.
 	image = foreground_image = IMG_EMPTY;
 	state = 0;
 	ticks_ns = ticks_ow = 16;
@@ -103,9 +124,12 @@ roadsign_t::roadsign_t(player_t *player, koord3d pos, ribi_t::ribi dir, const ro
 	 */
 	automatic = (desc->get_count()>4  &&  desc->get_wtyp()==road_wt)  ||  (desc->get_count()>2  &&  desc->is_private_way());
 	// only traffic light need switches
-	// MVP SPIKE: ... and anything the pakset marked as animated.
-	if(  automatic  ||  (desc  &&  desc->is_animated())  ) {
+	// MVP SPIKE: ... and anything the pakset marked as animated, plus - under
+	// SPIKE_FORCE_ANIM - every signal, to measure the worst case.
+	if(  automatic  ||  (desc  &&  desc->is_animated())
+	     ||  (spike_force_register()  &&  desc  &&  desc->is_signal_type())  ) {
 		welt->sync_roadsigns.add(this);
+		in_sync_list = 1;
 		// Stagger the start, or every sign of the same type blinks in unison.
 		if(  desc  &&  desc->is_animated()  ) {
 			anim_frame = sim_async_rand( desc->get_phases() );
@@ -141,7 +165,9 @@ roadsign_t::~roadsign_t()
 		player_t::add_maintenance( this->get_owner(), -desc->get_maintenance(), finance_waytype);
 	}
 
-	if (automatic) {
+	// MVP SPIKE: was `if (automatic)`, which no longer matches the registration
+	// condition. See roadsign.h:in_sync_list.
+	if (in_sync_list) {
 		welt->sync_roadsigns.remove(this);
 	}
 }
@@ -502,6 +528,29 @@ sync_result roadsign_t::sync_step(uint32 delta_t)
 	if (!desc) {
 		// some illegal sign ...
 		return SYNC_DELETE;
+	}
+
+	// MVP SPIKE, worst-case arm. Everything below this block after the
+	// is_private_way() branch is TRAFFIC LIGHT logic, and it asks the tile for
+	// ribi of waytype ROAD. A rail signal has no road, so it gets ribi_t::none
+	// and returns SYNC_DELETE -- and SYNC_DELETE is `delete ss` in
+	// simworld.h:1078, so the signal is not merely dropped from the list, it is
+	// destroyed. Measured, not assumed: see RESULTS.md.
+	//
+	// So the worst case cannot be produced by shoving signals into this list; it
+	// has to do the work an animated signal would do and get out. That is also
+	// the honest thing to time, because it is what a real implementation would
+	// run per signal per frame.
+	if(  spike_force_register()  &&  desc->is_signal_type()  &&  !desc->is_animated()  ) {
+		anim_time += delta_t;
+		if(  anim_time > 600  ) {
+			anim_time -= 600;
+			anim_frame = (anim_frame + 1) & 3;
+			mark_image_dirty( get_image(), 0 );
+			set_flag( obj_t::dirty );
+			calc_image();
+		}
+		return SYNC_OK;
 	}
 
 	// MVP SPIKE: advance the animation phase. Guarded on is_animated(), so a

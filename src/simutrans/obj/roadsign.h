@@ -44,6 +44,13 @@ protected:
 	uint8 automatic:1;
 	uint8 preview:1;
 
+	// MVP SPIKE: whether this object is in welt->sync_roadsigns. The destructor
+	// used to re-derive that from `automatic` alone, which stopped matching the
+	// registration condition the moment animation was added -- an animated sign
+	// registered and was never removed, leaving a dangling pointer in the list.
+	// Record the fact instead of recomputing it; the two can then never drift.
+	uint8 in_sync_list:1;
+
 	/*
 	 * Many things go in these...
 	 *   Traffic lights -> intended usage

@@ -4,6 +4,7 @@
  */
 
 #include <algorithm>
+#include <chrono> // SPIKE: dr_time() is milliseconds, far too coarse to time a sync list.
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -2662,24 +2663,29 @@ void karte_t::sync_step(uint32 delta_t)
 	 */
 	// --- SPIKE INSTRUMENTATION -------------------------------------------
 	// Not for upstream. Times the two sync lists and reports every 600 frames.
+	// dr_time() is timeGetTime()/SDL_GetTicks() - MILLISECONDS. Walking a few
+	// hundred objects costs far less than one tick, so every delta rounded to
+	// zero and the total read "0 ms", which is not "free", it is "below the
+	// clock". steady_clock is backed by QueryPerformanceCounter here.
+	typedef std::chrono::steady_clock spike_clock;
 	static uint32 spike_frames = 0;
-	static uint32 spike_us_buildings = 0;
-	static uint32 spike_us_roadsigns = 0;
-	const uint32 spike_t0 = dr_time();
+	static uint64 spike_ns_buildings = 0;
+	static uint64 spike_ns_roadsigns = 0;
+	const spike_clock::time_point spike_t0 = spike_clock::now();
 
 	sync_buildings.sync_step(delta_t);
 
-	const uint32 spike_t1 = dr_time();
-	spike_us_buildings += spike_t1 - spike_t0;
+	const spike_clock::time_point spike_t1 = spike_clock::now();
+	spike_ns_buildings += std::chrono::duration_cast<std::chrono::nanoseconds>(spike_t1 - spike_t0).count();
 
 	wolke_t::sync_handler(delta_t);
 
 	pedestrian_t::sync_handler(delta_t);
 
 	// the following sync_steps affect the game state
-	const uint32 spike_t2 = dr_time();
+	const spike_clock::time_point spike_t2 = spike_clock::now();
 	sync_roadsigns.sync_step(delta_t);
-	spike_us_roadsigns += dr_time() - spike_t2;
+	spike_ns_roadsigns += std::chrono::duration_cast<std::chrono::nanoseconds>(spike_clock::now() - spike_t2).count();
 
 	if(  ++spike_frames >= 600  ) {
 		// Walk the whole map once and count what is actually out there, so the
@@ -2710,14 +2716,21 @@ void karte_t::sync_step(uint32 delta_t)
 				get_size().x, get_size().y, n_tiles, dr_time() - walk_t0,
 				n_signal, n_roadsign);
 		}
-		dbg->message("SPIKE", "over %u frames: sync_buildings %u objs %u ms; "
-			"sync_roadsigns %u objs %u ms",
+		// Report the per-frame average in nanoseconds as well as the total, so a
+		// result can be read against a 25 fps frame budget of 40,000,000 ns.
+		dbg->message("SPIKE", "over %u frames: "
+			"sync_buildings %u objs, %llu ns total, %llu ns/frame; "
+			"sync_roadsigns %u objs, %llu ns total, %llu ns/frame",
 			spike_frames,
-			sync_buildings.list.get_count(), spike_us_buildings,
-			sync_roadsigns.list.get_count(), spike_us_roadsigns);
+			sync_buildings.list.get_count(),
+			(unsigned long long)spike_ns_buildings,
+			(unsigned long long)(spike_ns_buildings / spike_frames),
+			sync_roadsigns.list.get_count(),
+			(unsigned long long)spike_ns_roadsigns,
+			(unsigned long long)(spike_ns_roadsigns / spike_frames));
 		spike_frames = 0;
-		spike_us_buildings = 0;
-		spike_us_roadsigns = 0;
+		spike_ns_buildings = 0;
+		spike_ns_roadsigns = 0;
 	}
 	// --- END SPIKE INSTRUMENTATION ---------------------------------------
 

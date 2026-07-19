@@ -3584,6 +3584,38 @@ bool stadt_t::renovate_city_building(gebaeude_t *gb)
 			k = base_pos.get_2d();
 		}
 
+		// --- SPIKE INSTRUMENTATION, not for upstream -----------------------
+		// Forum 23991 (makie): an elevated way refuses to be built over a tall
+		// building, but renovation happily grows a short one into a tall one
+		// underneath an existing elevated way.
+		//
+		// wegbauer.cc:609 decides "too tall" with
+		//     gb->get_tile()->get_background(0,1,0) != IMG_EMPTY
+		// i.e. does the building draw anything at HEIGHT 1. Apply the very same
+		// predicate to the REPLACEMENT, and report when it would be accepted on
+		// a tile that has something above it. If this never fires, the report is
+		// wrong or reaches the building by some other path.
+		{
+			const grund_t *sp_gr = welt->lookup_kartenboden(k);
+			const grund_t *sp_above = sp_gr
+				? welt->lookup(sp_gr->get_pos()
+					+ koord3d(0, 0, welt->get_settings().get_way_height_clearance()))
+				: NULL;
+			if(  sp_above  &&  sp_above->get_weg_nr(0)  ) {
+				const building_tile_desc_t *sp_tile = h->get_tile(0);
+				const bool sp_tall = sp_tile
+					&&  sp_tile->get_background(0, 1, 0) != IMG_EMPTY;
+				dbg->message("SPIKE-RENOVATE",
+					"%s at %s: replacement '%s' level %i, draws_at_height_1=%s"
+					"  <-- elevated %s overhead",
+					sp_tall ? "TALL UNDER ELEVATED" : "ok",
+					k.get_str(), h->get_name(), h->get_level(),
+					sp_tall ? "YES" : "no",
+					sp_above->get_weg_nr(0)->get_name());
+			}
+		}
+		// --- END SPIKE -----------------------------------------------------
+
 		int rotation2 = orient_city_building(k, h, max_size);
 		const gebaeude_t *gb= build_city_house(koord3d(k, base_pos.z), h, rotation2, cl, &exclude_desc);
 		if (gb) {

@@ -2660,14 +2660,66 @@ void karte_t::sync_step(uint32 delta_t)
 	/* animations do not require exact sync
 	 * foundations etc are added removed frequently during city growth
 	 */
+	// --- SPIKE INSTRUMENTATION -------------------------------------------
+	// Not for upstream. Times the two sync lists and reports every 600 frames.
+	static uint32 spike_frames = 0;
+	static uint32 spike_us_buildings = 0;
+	static uint32 spike_us_roadsigns = 0;
+	const uint32 spike_t0 = dr_time();
+
 	sync_buildings.sync_step(delta_t);
+
+	const uint32 spike_t1 = dr_time();
+	spike_us_buildings += spike_t1 - spike_t0;
 
 	wolke_t::sync_handler(delta_t);
 
 	pedestrian_t::sync_handler(delta_t);
 
 	// the following sync_steps affect the game state
+	const uint32 spike_t2 = dr_time();
 	sync_roadsigns.sync_step(delta_t);
+	spike_us_roadsigns += dr_time() - spike_t2;
+
+	if(  ++spike_frames >= 600  ) {
+		// Walk the whole map once and count what is actually out there, so the
+		// sync-list sizes can be read against the real population.
+		static bool spike_counted = false;
+		static uint32 n_signal = 0, n_roadsign = 0, n_tiles = 0;
+		if(  !spike_counted  ) {
+			spike_counted = true;
+			const uint32 walk_t0 = dr_time();
+			for(  sint16 y = 0;  y < get_size().y;  y++  ) {
+				for(  sint16 x = 0;  x < get_size().x;  x++  ) {
+					const planquadrat_t *pl = access(koord(x, y));
+					if(  !pl  ) continue;
+					for(  unsigned b = 0;  b < pl->get_boden_count();  b++  ) {
+						grund_t *gr = pl->get_boden_bei(b);
+						if(  !gr  ) continue;
+						n_tiles++;
+						for(  uint8 i = 0;  i < gr->obj_count();  i++  ) {
+							obj_t *obj = gr->obj_bei(i);
+							if(  obj->get_typ() == obj_t::signal  )       n_signal++;
+							else if(  obj->get_typ() == obj_t::roadsign  ) n_roadsign++;
+						}
+					}
+				}
+			}
+			dbg->message("SPIKE", "map %ix%i, %u grounds walked in %u ms: "
+				"%u signal_t, %u roadsign_t",
+				get_size().x, get_size().y, n_tiles, dr_time() - walk_t0,
+				n_signal, n_roadsign);
+		}
+		dbg->message("SPIKE", "over %u frames: sync_buildings %u objs %u ms; "
+			"sync_roadsigns %u objs %u ms",
+			spike_frames,
+			sync_buildings.list.get_count(), spike_us_buildings,
+			sync_roadsigns.list.get_count(), spike_us_roadsigns);
+		spike_frames = 0;
+		spike_us_buildings = 0;
+		spike_us_roadsigns = 0;
+	}
+	// --- END SPIKE INSTRUMENTATION ---------------------------------------
 
 	movingobj_t::sync_handler(delta_t);
 

@@ -34,6 +34,11 @@ protected:
 	};
 
 	uint8 state:2; // counter for steps ...
+
+	// MVP SPIKE: animation phase. Display only -- never saved, never sent, and
+	// consulted by no game rule, exactly like gebaeude_t::anim_frame.
+	uint8  anim_frame = 0;
+	uint32 anim_time  = 0;
 	uint8 dir:4;
 
 	uint8 automatic:1;

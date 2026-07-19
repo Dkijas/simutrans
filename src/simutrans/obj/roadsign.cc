@@ -12,6 +12,7 @@
 #include "../player/simplay.h"
 #include "../tool/simtool.h"
 #include "../world/simworld.h"
+#include "../utils/simrandom.h"
 
 #include "../descriptor/roadsign_desc.h"
 #include "../descriptor/skin_desc.h"
@@ -62,8 +63,13 @@ roadsign_t::roadsign_t(loadsave_t *file) : obj_t ()
 		state = 0;
 	}
 	// only traffic light need switches
-	if(  automatic  ) {
+	// MVP SPIKE: ... and anything the pakset marked as animated.
+	if(  automatic  ||  (desc  &&  desc->is_animated())  ) {
 		welt->sync_roadsigns.add(this);
+		// Stagger the start, or every sign of the same type blinks in unison.
+		if(  desc  &&  desc->is_animated()  ) {
+			anim_frame = sim_async_rand( desc->get_phases() );
+		}
 	}
 }
 
@@ -97,8 +103,13 @@ roadsign_t::roadsign_t(player_t *player, koord3d pos, ribi_t::ribi dir, const ro
 	 */
 	automatic = (desc->get_count()>4  &&  desc->get_wtyp()==road_wt)  ||  (desc->get_count()>2  &&  desc->is_private_way());
 	// only traffic light need switches
-	if(  automatic  ) {
+	// MVP SPIKE: ... and anything the pakset marked as animated.
+	if(  automatic  ||  (desc  &&  desc->is_animated())  ) {
 		welt->sync_roadsigns.add(this);
+		// Stagger the start, or every sign of the same type blinks in unison.
+		if(  desc  &&  desc->is_animated()  ) {
+			anim_frame = sim_async_rand( desc->get_phases() );
+		}
 	}
 }
 
@@ -481,11 +492,29 @@ void roadsign_t::calc_image()
 
 
 // only used for traffic light: change the current state
-sync_result roadsign_t::sync_step(uint32 /*delta_t*/)
+// --- SPIKE: live instance counters, not for upstream ---
+uint32 spike_roadsign_count = 0;
+uint32 spike_signal_count = 0;
+// --- END SPIKE ---
+
+sync_result roadsign_t::sync_step(uint32 delta_t)
 {
 	if (!desc) {
 		// some illegal sign ...
 		return SYNC_DELETE;
+	}
+
+	// MVP SPIKE: advance the animation phase. Guarded on is_animated(), so a
+	// pakset that supplies one phase does no work here at all.
+	if(  desc->is_animated()  ) {
+		anim_time += delta_t;
+		if(  anim_time > desc->get_animation_time()  ) {
+			anim_time -= desc->get_animation_time();
+			anim_frame = (anim_frame + 1) % desc->get_phases();
+			mark_image_dirty( get_image(), 0 );
+			set_flag( obj_t::dirty );
+			calc_image();
+		}
 	}
 	if(  desc->is_private_way()  ) {
 		uint8 image = 1-(dir&1);

@@ -46,7 +46,20 @@ obj_desc_t *roadsign_reader_t::read_node(FILE *fp, obj_node_info_t &node)
 	const int version = v & 0x8000 ? v & 0x7FFF : 0;
 	roadsign_desc_t *desc = new roadsign_desc_t();
 
-	if (version == 6) {
+	if (version == 7) {
+		// MVP SPIKE: adds phases + animation_time
+		desc->min_speed      = kmh_to_speed(decode_uint16(p));
+		desc->price          = decode_sint64(p);
+		desc->maintenance    = decode_sint64(p);
+		desc->flags          = decode_uint16(p);
+		desc->offset_left    = decode_sint8(p);
+		desc->wtyp           = decode_uint8(p);
+		desc->intro_date     = decode_uint16(p);
+		desc->retire_date    = decode_uint16(p);
+		desc->phases         = decode_uint8(p);
+		desc->animation_time = decode_uint16(p);
+	}
+	else if (version == 6) {
 		// cost as sint64, maintenance added
 		desc->min_speed   = kmh_to_speed(decode_uint16(p));
 		desc->price       = decode_sint64(p);
@@ -105,6 +118,13 @@ obj_desc_t *roadsign_reader_t::read_node(FILE *fp, obj_node_info_t &node)
 	}
 	else {
 		dbg->fatal( "roadsign_reader_t::read_node()", "Cannot handle too new node version %i", version );
+	}
+
+	if(  version < 7  ) {
+		// Older paksets are not animated. Defaulting here rather than in the
+		// constructor keeps the "what did this version not have" story in one place.
+		desc->phases         = 1;
+		desc->animation_time = 0;
 	}
 
 	if(  version<=3  &&  (  desc->is_choose_sign() ||  desc->is_private_way()  )  &&  desc->get_waytype() == road_wt  ) {

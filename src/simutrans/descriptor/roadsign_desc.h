@@ -33,6 +33,12 @@ private:
 
 	uint16 min_speed; // 0 = no min speed
 
+	// MVP SPIKE: animation. 1 phase means "not animated" and costs nothing,
+	// because the object then never joins a sync list -- same opt-in shape as
+	// building_tile_desc_t::get_phases().
+	uint8  phases;         // default 1
+	uint16 animation_time; // ms per phase, default 0
+
 public:
 	enum types {
 		NONE                  = 0,
@@ -58,6 +64,13 @@ public:
 	skin_desc_t const* get_cursor() const { return get_child<skin_desc_t>(3); }
 
 	uint16 get_min_speed() const { return min_speed; }
+
+	uint8  get_phases() const { return phases; }
+	uint16 get_animation_time() const { return animation_time; }
+	bool   is_animated() const { return phases > 1  &&  animation_time > 0; }
+
+	/// Images per animation phase: everything the non-animated layout indexes.
+	uint16 get_phase_stride() const { return phases > 1 ? get_count() / phases : get_count(); }
 
 	bool is_single_way() const { return (flags & ONE_WAY) != 0; }
 

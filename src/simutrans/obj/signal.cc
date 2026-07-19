@@ -66,9 +66,14 @@ void signal_t::calc_image()
 		if(sch) {
 			uint16 offset=0;
 			ribi_t::ribi dir = sch->get_ribi_unmasked() & (~calc_mask());
-			if(sch->is_electrified()  &&  (desc->get_count()/8)>1) {
+			if(sch->is_electrified()  &&  (desc->get_count()/desc->get_phases()/8)>1) {
 				offset = (desc->is_pre_signal()  ||  desc->is_priority_signal()) ? 12 : 8;
 			}
+			// MVP SPIKE: an animation phase is a whole extra copy of the layout.
+			// get_phase_stride() divides get_count() by the phase count, which is
+			// why the electrified test above had to be divided too -- get_count()
+			// is used as a heuristic in two places and both move together.
+			offset += anim_frame * desc->get_phase_stride();
 
 			// vertical offset of the signal positions
 			if(full_hang==slope_t::flat) {

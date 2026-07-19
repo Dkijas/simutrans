@@ -113,9 +113,12 @@ void roadsign_writer_t::write_obj(FILE* fp, obj_node_t& parent, tabfileobj_t& ob
 	}
 	// this causes unused entries to give a warning that they are ignored
 
-	obj_node_t node(this, 28, &parent);
+	const uint8  phases         = obj.get_int("phases",         1);
+	const uint16 animation_time = obj.get_int("animation_time", 0);
 
-	node.write_version(fp, 6);
+	obj_node_t node(this, 31, &parent);
+
+	node.write_version(fp, 7);
 	node.write_uint16(fp, min_speed);
 	node.write_sint64(fp, price);
 	node.write_sint64(fp, maintenance);
@@ -130,6 +133,9 @@ void roadsign_writer_t::write_obj(FILE* fp, obj_node_t& parent, tabfileobj_t& ob
 	uint16 retire_date = obj.get_int("retire_year", DEFAULT_RETIRE_YEAR) * 12;
 	retire_date += obj.get_int("retire_month", 1) - 1;
 	node.write_uint16(fp, retire_date);
+
+	node.write_uint8 (fp, phases);
+	node.write_uint16(fp, animation_time);
 
 	write_name_and_copyright(fp, node, obj);
 

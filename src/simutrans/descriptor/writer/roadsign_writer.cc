@@ -19,6 +19,78 @@ static const char* private_sign_directions[] = {"ns", "ew"};
 static const char* traffic_light_directions[] = {"n", "s", "w", "e", "nw", "se", "sw", "ne"};
 static const char* general_sign_directions[] = {"n", "s", "w", "e"};
 
+// MVP SPIKE: parse "image[direction][state][phase]".
+//
+// This did not exist. The first version of this spike added `phases` to the node
+// and multiplied anim_frame by a stride in signal_t::calc_image, but there was no
+// syntax to SUPPLY the extra images - the list still only ever held one phase, so
+// the stride indexed off the end of it. That MVP was reported as "complete
+// end-to-end" and was not: the data path was missing altogether, and nothing
+// caught it because no pakset had ever asked for a second phase.
+//
+// PHASE IS THE SLOWEST INDEX. The engine computes
+//     dir + state*dir_cnt + phase*get_phase_stride()
+// with get_phase_stride() == get_count()/phases, so one phase must be a whole
+// contiguous copy of the direction-by-state layout. Any other order shows a
+// different ASPECT per frame, which is not a graphical glitch.
+//
+// Returns the number of states found, or 0 if this object has no 3d images.
+static uint8 parse_images_3d(slist_tpl<std::string>& keys, tabfileobj_t& obj,
+                             roadsign_desc_t::types flags, uint8 phases)
+{
+	// Same direction table as the 2d path, chosen the same way, so the two can
+	// never disagree about what counts as a traffic light.
+	const char** directions;
+	uint8 dir_cnt;
+	if(  flags&roadsign_desc_t::PRIVATE_ROAD  ) {
+		directions = private_sign_directions;
+		dir_cnt = lengthof(private_sign_directions);
+	}
+	else if(  *obj.get("image[ne][0]")  ||  *obj.get("image[ne][0][0]")  ) {
+		directions = traffic_light_directions;
+		dir_cnt = lengthof(traffic_light_directions);
+	}
+	else {
+		directions = general_sign_directions;
+		dir_cnt = lengthof(general_sign_directions);
+	}
+
+	char buf[64];
+	sprintf(buf, "image[%s][0][0]", directions[0]);
+	if(  !*obj.get(buf)  ) {
+		return 0; // not a phased object; the 2d parser handles it
+	}
+
+	// How many states does phase 0 declare? Same discovery rule as the 2d path.
+	uint8 states = 0;
+	for(  uint8 state = 0;  state < 8;  state++  ) {
+		sprintf(buf, "image[%s][%i][0]", directions[0], state);
+		if(  !*obj.get(buf)  ) {
+			break;
+		}
+		states++;
+	}
+
+	for(  uint8 phase = 0;  phase < phases;  phase++  ) {
+		for(  uint8 state = 0;  state < states;  state++  ) {
+			for(  uint8 idx = 0;  idx < dir_cnt;  idx++  ) {
+				sprintf(buf, "image[%s][%i][%i]", directions[idx], state, phase);
+				const char* img = obj.get(buf);
+				if(  !*img  ) {
+					// Unlike the 2d parser there is nothing to infer: the phase
+					// count is declared, so a hole is always an error.
+					dbg->fatal("roadsign_writer",
+						"%s is missing (phases=%i declares %i images)",
+						buf, phases, phases*states*dir_cnt);
+				}
+				keys.append(img);
+			}
+		}
+	}
+	return states;
+}
+
+
 // parse "image[direction][state]" syntax
 void parse_images_2d(slist_tpl<std::string>& keys, tabfileobj_t& obj, roadsign_desc_t::types flags)
 {
@@ -146,6 +218,11 @@ void roadsign_writer_t::write_obj(FILE* fp, obj_node_t& parent, tabfileobj_t& ob
 		// image[0] is defined.
 		// assume that images are defined in image[number] syntax.
 		parse_images_numbered(keys, obj);
+	}
+	else if(  parse_images_3d(keys, obj, flags, phases)  ) {
+		// MVP SPIKE: image[direction][state][phase]. Returns 0 and consumes
+		// nothing when the object has no phased images, so the 2d path below
+		// stays the default and every existing pakset takes it.
 	}
 	else {
 		// image[0] is not defined.

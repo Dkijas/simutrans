@@ -494,7 +494,25 @@ void planquadrat_t::display_obj(const sint16 xpos, const sint16 ypos, const sint
 					image_id img = o->get_image();
 					if (img != IMG_EMPTY) {
 						const scr_rect area = gfx->get_image_offset(img);
-						max_height = max(max_height, (area.h - area.y) / clip_h);
+						// --- SPIKE: unit experiment ------------------------
+						// max_height is compared against (htop - hmin), which are
+						// HEIGHT LEVELS. But it is computed by dividing pixels by
+						// clip_h, which for pak128 is 96 - roughly a whole tile.
+						// One height level on screen is
+						// tile_raster_scale_y(TILE_HEIGHT_STEP, rw) = 8*128>>6 = 16.
+						// So the divisor is ~6x too large and almost everything
+						// rounds to zero. SPIKE_CLIP_FIX=1 divides by the level
+						// height instead, so both arms come from one binary.
+						static int spike_fix = -1;
+						if(  spike_fix < 0  ) {
+							const char *e = getenv("SPIKE_CLIP_FIX");
+							spike_fix = (e && *e && *e != '0') ? 1 : 0;
+						}
+						const sint16 spike_div = spike_fix
+							? max((sint16)1, (sint16)tile_raster_scale_y(TILE_HEIGHT_STEP, rw))
+							: clip_h;
+						max_height = max(max_height, (area.h - area.y) / spike_div);
+						// --- END SPIKE -------------------------------------
 					}
 				}
 			}
@@ -528,6 +546,24 @@ void planquadrat_t::display_obj(const sint16 xpos, const sint16 ypos, const sint
 								continue;
 							}
 						}
+						// --- SPIKE: log the real comparison -----------------
+						// An earlier version of this instrumentation printed
+						// (hmax - hmin) = 127 and concluded the gap was huge.
+						// hmin is THIS TILE'S ground height and hmax is 127 in
+						// overground view (simview.cc:485), so the quantity that
+						// matters is htop - hmin, and it is 2 for a way at the
+						// default clearance. The log was wrong, not the engine.
+						{
+							static uint32 spike_n = 0;
+							if(  spike_n < 10  ) {
+								spike_n++;
+								dbg->message("SPIKE-CLIP",
+									"tile %s: max_height=%i, htop-hmin=%i -> %s",
+									gr0->get_pos().get_str(), max_height, (int)(htop - hmin),
+									(htop - hmin > max_height) ? "NO CLIP" : "CLIPS");
+							}
+						}
+						// --- END SPIKE ---------------------------------------
 						if (htop - hmin > max_height) {
 							// lower than max height difference=> stop checking
 							break;

@@ -486,7 +486,14 @@ void planquadrat_t::display_obj(const sint16 xpos, const sint16 ypos, const sint
 			// there are grounds above => check height of height object below
 			sint16 max_height = 0;
 			sint16 rw = gfx->get_base_tile_raster_width();
-			const sint16 clip_h = rw / 2 + (env_t::pak_height_conversion_factor * rw / 8);
+			// max_height is compared against (htop - hmin) below, and those are
+			// HEIGHT LEVELS, so the object's pixel extent has to be divided by
+			// the on-screen size of one level. Dividing by roughly a whole tile
+			// instead - 96 for pak128, 40 for pak64, against a level height of
+			// 16 in both - made the quotient several times too small, so it
+			// rounded to zero for most objects and the clipping below was
+			// skipped entirely.
+			const sint16 level_h = max((sint16)1, (sint16)tile_raster_scale_y(TILE_HEIGHT_STEP, rw));
 
 			for (uint8 i = 0; i < gr0->obj_count(); i++) {
 				obj_t* o = gr0->obj_bei(i);
@@ -494,7 +501,7 @@ void planquadrat_t::display_obj(const sint16 xpos, const sint16 ypos, const sint
 					image_id img = o->get_image();
 					if (img != IMG_EMPTY) {
 						const scr_rect area = gfx->get_image_offset(img);
-						max_height = max(max_height, (area.h - area.y) / clip_h);
+						max_height = max(max_height, (area.h - area.y) / level_h);
 					}
 				}
 			}

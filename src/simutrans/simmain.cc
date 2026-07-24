@@ -24,6 +24,10 @@
 #include "simware.h"
 #include "display/simview.h"
 #include "gui/simwin.h"
+#include "gui/line_management_gui.h"   // -lineroute_demo screenshot tour (test/demo infra)
+#include "simline.h"
+#include "dataobj/schedule.h"
+#include "display/viewport.h"
 #include "gui/gui_theme.h"
 #include "gui/messagebox.h"
 #include "simhalt.h"
@@ -1458,6 +1462,40 @@ int simu_main(int argc, char** argv)
 	main_view_t *view = new main_view_t(welt);
 	welt->set_view( view );
 
+	// --- test/demo infrastructure (line-route overlay) ---------------------------------
+	// If SIMUTRANS_LINEROUTE_MAKEMAP names a file, generate a flat, empty, deterministic
+	// base map and save it there, then exit. Squirrel cannot create maps, so the demo/test
+	// scenario needs a fixed base .sve to build on. A constant (all-zero) height field makes
+	// the map perfectly flat regardless of terrain settings (init stores h_field+1), and a
+	// fresh settings_t keeps the fixed default seed; no cities/factories/trees are placed.
+	// This is not a product code path.
+	if(  const char *makemap = args.gimme_arg("-lineroute_makemap", 1)  ) {
+		settings_t sets;
+		sets.copy_city_road( env_t::default_settings );
+		sets.set_default_climates();
+		sets.set_size( 64, 64 );
+		sets.set_city_count( 0 );
+		sets.set_factory_count( 0 );
+		sets.set_tourist_attractions( 0 );
+		sets.set_tree_distribution( settings_t::TREE_DIST_NONE );
+		const sint32 wh = sets.get_size_x() * sets.get_size_y();
+		sint8 *heights = new sint8[wh];
+		// init stores grid height = h_field+1, so -1 yields grid height 0: a flat plain
+		// whose tiles sit at z==0, matching the coord3d(x,y,0) convention used by the tests.
+		memset( heights, -1, wh );
+		// a non-empty heightfield name makes enlarge_map use our in-memory h_field instead of
+		// perlin (simworld.cc:1749); no file is ever opened, so the result is fully deterministic.
+		sets.heightfield = "flat";
+		intr_set_view( view );
+		win_set_world( welt );
+		welt->init( &sets, heights );
+		delete [] heights;
+		welt->save( makemap, false, SAVEGAME_VER_NR, true );
+		dbg->message( "simu_main()", "[LINEROUTE] base map written to '%s'", makemap );
+		exit( 0 );
+	}
+	// -----------------------------------------------------------------------------------
+
 	interaction_t *eventmanager = new interaction_t(welt->get_viewport());
 	welt->set_eventmanager( eventmanager );
 
@@ -1705,6 +1743,57 @@ int simu_main(int argc, char** argv)
 
 		dbg->message("simu_main()", "Running world, pause=%i, fast forward=%i ... ", welt->is_paused(), welt->is_fast_forward() );
 		loadgame = ""; // only first time
+
+		// --- test/demo infrastructure (line-route overlay) -----------------------------
+		// -lineroute_demo: after the demo save is loaded, tour each line, centre the camera
+		// on it, activate the route overlay via its real code path, render a frame and take a
+		// screenshot (screenshot/simscrNN.png), then exit. Screenshots are not scriptable from
+		// Squirrel, so this small C++ tour is how the visual demo is captured. Not a product path.
+		if(  args.has_arg("-lineroute_demo")  ) {
+			player_t *demopl = welt->get_player(0);
+			int shot = 0;
+			// -lineroute_left: force left-hand traffic so the overlay's lane sides can be captured
+			if(  args.has_arg("-lineroute_left")  ) {
+				welt->get_settings().set_drive_left( true );
+			}
+			win_change_zoom_factor( true ); // zoom in one step so the highlighted route reads clearly
+			if(  demopl  ) {
+				const vector_tpl<linehandle_t> &lines = demopl->simlinemgmt.get_line_list();
+				for(  uint32 i = 0;  i < lines.get_count();  i++  ) {
+					linehandle_t line = lines[i];
+					if(  !line.is_bound()  ||  line->count_convoys() == 0  ) {
+						continue;
+					}
+					schedule_t *s = line->get_schedule();
+					if(  s == NULL  ||  s->get_count() < 1  ) {
+						continue;
+					}
+					// centre the camera on the middle of the route (average of its stops)
+					sint32 sx = 0, sy = 0;
+					const uint8 n = s->get_count();
+					for(  uint8 e = 0;  e < n;  e++  ) {
+						sx += s->entries[e].pos.x;
+						sy += s->entries[e].pos.y;
+					}
+					welt->get_viewport()->change_world_position( koord3d( (sint16)(sx/n), (sint16)(sy/n), 0 ) );
+					const ptrdiff_t magic = (ptrdiff_t)line.get_rep();
+					line_management_gui_t *lw = new line_management_gui_t( line, line->get_owner(), 1 );
+					create_win( lw, w_info, magic );
+					win_set_pos( lw, scr_coord( 8, 40 ) ); // tuck the window into the corner, off the route
+					lw->toggle_route_overlay();
+					welt->set_dirty();
+					view->display( true );
+					intr_refresh_display( true );
+					gfx->take_screenshot( scr_rect( scr_coord(0,0), gfx->get_screen_size() ) );
+					lw->toggle_route_overlay();
+					destroy_win( magic );
+					shot++;
+				}
+			}
+			dbg->message( "simu_main()", "[LINEROUTE] demo screenshots taken: %d", shot );
+			exit( 0 );
+		}
+		// -------------------------------------------------------------------------------
 
 		// run the loop
 		welt->interactive(quit_month);

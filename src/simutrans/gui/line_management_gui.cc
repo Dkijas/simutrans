@@ -11,12 +11,14 @@
 #include "../dataobj/schedule.h"
 #include "../dataobj/loadsave.h"
 #include "../dataobj/translator.h"
+#include "../dataobj/route.h"
 
 #include "../vehicle/vehicle.h"
 
 #include "../convoihandle.h"
 #include "../simconvoi.h"
 #include "../obj/depot.h"
+#include "../ground/grund.h"
 #include "../simhalt.h"
 #include "../simline.h"
 #include "../tool/simmenu.h"
@@ -95,6 +97,7 @@ line_management_gui_t::line_management_gui_t( linehandle_t line_, player_t* play
 	loading_info( &loading_text )
 {
 	is_saving_gui = false;
+	route_shown = false;
 	set_table_layout( 3, 0 );
 	set_alignment(ALIGN_TOP);
 	line = line_;
@@ -117,6 +120,13 @@ line_management_gui_t::line_management_gui_t( linehandle_t line_, player_t* play
 	add_component( &lb_profit_value );
 	add_component( &loading_info, 2 );
 	loading_text.printf( translator::translate("Capacity: %s\nLoad: %d (%d%%)"), 0, 0, 0);
+
+	// MVP: toggle to draw the line's real route (engine pathfinder) on the main map.
+	// Kept in the always-visible header so it works from every tab.
+	bt_show_route.init( button_t::roundbox_state | button_t::flexible, "Show route on map" );
+	bt_show_route.set_tooltip( "Show the calculated route of this line on the main map." );
+	bt_show_route.add_listener( this );
+	add_component( &bt_show_route, 3 );
 
 	// tab panel: connections, chart panels, details
 	add_component( &switch_mode, 3 );
@@ -236,6 +246,10 @@ void line_management_gui_t::draw(scr_coord pos, scr_size size)
 		}
 		bt_withdraw_line.enable(is_change_allowed);
 		bt_find_convois.enable(is_change_allowed);
+
+		// route overlay needs a convoy to act as the test driver
+		bt_show_route.enable( line->count_convoys() > 0 );
+		bt_show_route.pressed = route_shown;
 
 		if(  line->count_convoys() != old_convoi_count  ) {
 
@@ -404,6 +418,31 @@ void line_management_gui_t::apply_schedule()
 }
 
 
+// The whole action behind the "Show route on map" button. Extracted so the automated
+// demo/test harness can exercise the exact same code path as the button (see
+// api_line_route_test.cc). The GUI does NOT calculate the route here: it only issues a request
+// to tool_line_route_overlay_t, which runs the pathfinder during a proper step (not in sync_step)
+// and applies the highlight. "s,<id>" shows the line's route, "c" clears it.
+void line_management_gui_t::toggle_route_overlay()
+{
+	route_shown = !route_shown;
+	bt_show_route.pressed = route_shown;
+	tool_t *tool = create_tool( TOOL_LINE_ROUTE_OVERLAY | SIMPLE_TOOL );
+	cbuffer_t buf;
+	if(  route_shown  &&  line.is_bound()  ) {
+		buf.printf( "s,%u", line.get_id() );
+	}
+	else {
+		buf.printf( "c" );
+	}
+	tool->set_default_param( buf );
+	welt->set_tool( tool, player );
+	// init always returns false and the queued command copies the parameters, so it is safe to
+	// delete immediately
+	delete tool;
+}
+
+
 bool line_management_gui_t::action_triggered( gui_action_creator_t *comp, value_t v )
 {
 	if(line->count_convoys()>0) {
@@ -457,6 +496,9 @@ bool line_management_gui_t::action_triggered( gui_action_creator_t *comp, value_
 			// since init always returns false, it is safe to delete immediately
 			delete tmp_tool;
 		}
+	}
+	else if(  comp == &bt_show_route  ) {
+		toggle_route_overlay();
 	}
 	else if(  comp == &bt_find_convois  ) {
 		for(convoihandle_t cnv : welt->convoys()) {
@@ -517,6 +559,15 @@ bool line_management_gui_t::infowin_event( const event_t *ev )
 		}
 		scd.highlight_schedule( false );
 		minimap_t::get_instance()->set_selected_cnv(convoihandle_t());
+		// clear our route overlay so no highlight flags are left on the world (via the tool, so the
+		// clear happens in a proper step); skip when the game itself is closing down
+		if(  route_shown  &&  !is_saving_gui  ) {
+			tool_t *tool = create_tool( TOOL_LINE_ROUTE_OVERLAY | SIMPLE_TOOL );
+			tool->set_default_param( "c" );
+			welt->set_tool( tool, player );
+			delete tool;
+		}
+		route_shown = false;
 	}
 
 	if(  ev->ev_class == INFOWIN  &&  ev->ev_code == WIN_TOP  ) {

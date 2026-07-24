@@ -23,6 +23,8 @@
 #include "components/gui_textinput.h"
 
 #include "../linehandle.h"
+#include "../dataobj/koord3d.h"
+#include "../tpl/vector_tpl.h"
 
 class player_t;
 class loadsave_t;
@@ -47,7 +49,14 @@ class line_management_gui_t : public gui_frame_t, public action_listener_t
 	gui_button_to_chart_array_t button_to_chart;
 
 	button_t bt_withdraw_line, bt_find_convois;
+	button_t bt_show_route;
 	gui_scrolled_list_t scrolly_convois, scrolly_halts;
+
+	// Overlay: real route of the line drawn on the main map (proto/line-route-overlay).
+	// The window only tracks whether the overlay is shown; the actual route calculation and the
+	// highlighting are done by tool_line_route_overlay_t during a proper step (not in GUI code /
+	// sync_step). The button just issues a request to that tool.
+	bool route_shown;
 
 	gui_aligned_container_t container_schedule, container_stats, container_convois, container_halts;
 
@@ -89,6 +98,12 @@ public:
 	bool infowin_event( const event_t *ev ) OVERRIDE;
 
 	uint32 get_rdwr_id() OVERRIDE { return magic_line_schedule_rdwr_dummy; }
+
+	// The action behind the "Show route on map" button, shared by the button handler and the
+	// automated demo/test harness so both run the identical code path (api_line_route_test.cc).
+	// It only issues a request to tool_line_route_overlay_t; the diagnostic counters now live on
+	// that tool.
+	void toggle_route_overlay();
 };
 
 #endif

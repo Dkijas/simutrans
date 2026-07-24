@@ -261,6 +261,7 @@ target_sources(simutrans PRIVATE
 		src/simutrans/script/api/api_halt.cc
 		src/simutrans/script/api/api_include.cc
 		src/simutrans/script/api/api_line.cc
+		src/simutrans/script/api/api_line_route_test.cc
 		src/simutrans/script/api/api_map_objects.cc
 		src/simutrans/script/api/api_obj_desc.cc
 		src/simutrans/script/api/api_obj_desc_base.cc

@@ -294,6 +294,27 @@ void main_view_t::display(bool force_dirty)
 		}
 	}
 
+	// line-route overlay: draw the selected line's real path as a procedural stroke in the owning
+	// player's colour (display only). The scheduled stops keep their own obj_t::highlight channel,
+	// so the route no longer collides with the schedule-stop highlight.
+	{
+		const vector_tpl<koord3d>& route = welt->get_line_route_overlay();
+		if(  route.get_count() > 1  ) {
+			const PIXVAL col = gfx->palette_lookup( welt->get_line_route_overlay_color() );
+			for(  uint32 i = 1;  i < route.get_count();  i++  ) {
+				const koord3d a = route[i-1];
+				const koord3d b = route[i];
+				const koord d = b.get_2d() - a.get_2d();
+				if(  d.x < -1  ||  d.x > 1  ||  d.y < -1  ||  d.y > 1  ) {
+					continue; // not adjacent tiles: leg gap / broken leg -> no stroke across it
+				}
+				const scr_coord pa = viewport->get_screen_coord( a ) + scr_coord( IMG_SIZE/2, IMG_SIZE/2 );
+				const scr_coord pb = viewport->get_screen_coord( b ) + scr_coord( IMG_SIZE/2, IMG_SIZE/2 );
+				gfx->draw_line( pa.x, pa.y, pb.x, pb.y, col );
+			}
+		}
+	}
+
 	obj_t *zeiger = welt->get_zeiger();
 	DBG_DEBUG4("main_view_t::display", "display pointer");
 	if( zeiger  &&  zeiger->get_pos() != koord3d::invalid ) {

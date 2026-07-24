@@ -645,6 +645,7 @@ public:
 	uint32 get_server_frames_ahead() const { return server_frames_ahead; }
 
 	bool is_drive_left() const { return drive_on_left; }
+	void set_drive_left( bool yes ) { drive_on_left = yes; } // test/demo support: force driving side for the left-hand overlay capture
 	bool is_signals_left() const { return signals_on_left; }
 
 	sint32 get_way_toll_runningcost_percentage() const { return way_toll_runningcost_percentage; }

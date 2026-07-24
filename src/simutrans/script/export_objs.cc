@@ -27,6 +27,7 @@ void register_export_function(HSQUIRRELVM vm, bool scenario)
 	export_gui(vm, scenario);
 	export_halt(vm);
 	export_line(vm);
+	export_line_route_test(vm, scenario); // test/demo-only overlay hooks (no-op unless scenario)
 	export_map_objects(vm);
 	export_player(vm, scenario);
 	if (scenario) {

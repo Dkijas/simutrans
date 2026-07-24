@@ -1037,6 +1037,28 @@ public:
 	bool is_work_keeps_game_state() const OVERRIDE { return false; }
 };
 
+/**
+ * Display-only overlay: compute and highlight a line's real route on the main map.
+ * The pathfinder runs here, during a proper step -- never in GUI code / sync_step, which is
+ * enforced by is_init_keeps_game_state()==false (the request is queued from the GUI and executed
+ * from the command queue between steps). It is local/per-client (WFL_LOCAL): nothing is sent over
+ * the network, nothing is saved. The GUI only issues the request; this tool does the work.
+ * default_param: "s,<line_id>" shows that line's route, "c" clears the overlay.
+ */
+class tool_line_route_overlay_t : public tool_t {
+public:
+	tool_line_route_overlay_t() : tool_t(TOOL_LINE_ROUTE_OVERLAY | SIMPLE_TOOL) { flags = WFL_LOCAL | WFL_NO_CHK; }
+	bool init(player_t*) OVERRIDE;
+	bool is_init_keeps_game_state() const OVERRIDE { return false; }
+	bool is_work_keeps_game_state() const OVERRIDE { return false; }
+	// diagnostic counters for the automated demo/test harness (last computation + total passes)
+	static uint32 calc_route_call_count;
+	static uint32 last_segments_attempted;
+	static uint32 last_segments_valid;
+	static uint32 last_segments_failed;
+	static uint32 last_route_tiles;
+};
+
 class tool_rotate90_t : public tool_t {
 public:
 	tool_rotate90_t() : tool_t(TOOL_ROTATE90 | SIMPLE_TOOL) {}

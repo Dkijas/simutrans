@@ -171,6 +171,7 @@ const char* tool_t::id_to_string(uint16 id)
 			CASE_TO_STRING(TOOL_DAY_NIGHT_TOGGLE);
 			CASE_TO_STRING(TOOL_WORK_WORLD);
 			CASE_TO_STRING(TOOL_HALT_PERMISSION);
+			CASE_TO_STRING(TOOL_LINE_ROUTE_OVERLAY);
 		}
 	}
 	else if (id & DIALOGE_TOOL) {
@@ -344,6 +345,7 @@ tool_t* create_simple_tool(int toolnr)
 	case TOOL_SINGLE_WAY_TOOGLE:    tool = new tool_show_single_ways_t();     break;
 	case TOOL_WORK_WORLD:           tool = new tool_work_world_t();           break;
 	case TOOL_HALT_PERMISSION:      tool = new tool_change_permission_t();    break;
+	case TOOL_LINE_ROUTE_OVERLAY:   tool = new tool_line_route_overlay_t();   break;
 	case UNUSED_TOOL_ADD_MESSAGE: // fall-through - intended!!!111elf
 	case UNUSED_WKZ_PWDHASH_TOOL:
 		dbg->warning("create_simple_tool()", "Deprecated tool [%i] requested", toolnr);

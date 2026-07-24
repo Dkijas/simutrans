@@ -20,6 +20,7 @@ void export_goods_desc(HSQUIRRELVM vm);
 void export_gui(HSQUIRRELVM vm, bool scenario);
 void export_halt(HSQUIRRELVM vm);
 void export_line(HSQUIRRELVM vm);
+void export_line_route_test(HSQUIRRELVM vm, bool scenario); // test/demo-only overlay hooks
 void export_map_objects(HSQUIRRELVM vm);
 void export_player(HSQUIRRELVM vm, bool scenario);
 void export_scenario(HSQUIRRELVM vm);

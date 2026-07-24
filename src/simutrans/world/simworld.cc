@@ -1232,6 +1232,7 @@ void karte_t::init(settings_t* const sets, sint8 const* const h_field)
 	ticks = 0;
 	last_step_ticks = ticks;
 	schedule_counter = 0;
+	line_route_overlay.clear(); // display-only overlay: drop any route from a previous world
 	// ticks = 0x7FFFF800;  // Testing the 31->32 bit step
 
 	last_month = 0;
@@ -2039,6 +2040,7 @@ karte_t::karte_t() :
 
 	zeiger = NULL;
 	schedule_counter = 0;
+	line_route_overlay_color = 0; // display-only line-route overlay (empty until a line is shown)
 	nosave_warning = nosave = false;
 	loaded_rotation = 0;
 	last_year = 1930;
@@ -2372,6 +2374,10 @@ DBG_MESSAGE( "karte_t::rotate90()", "called" );
 
 	// clear marked region
 	zeiger->change_pos( koord3d::invalid );
+
+	// drop the line-route overlay: its stored tiles are pre-rotation coordinates (display only, the
+	// user re-shows the route to recompute it on the rotated map)
+	line_route_overlay.clear();
 
 	// preprocessing, detach stops from factories to prevent crash
 	for(halthandle_t const s : haltestelle_t::get_alle_haltestellen()) {
@@ -3812,6 +3818,9 @@ bool karte_t::load(const char *filename)
 	mute_sound(true);
 	gfx->set_show_load_cursor(true);
 	loadsave_t file;
+
+	// drop any line-route overlay from the previous game (display only, not saved)
+	line_route_overlay.clear();
 
 	// clear hash table with missing paks (may cause some small memory loss though)
 	pakset_manager_t::clear_missing_paks();

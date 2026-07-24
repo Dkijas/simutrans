@@ -76,6 +76,8 @@
 #include "../dataobj/schedule.h"
 #include "../dataobj/route.h"
 #include "../dataobj/scenario.h"
+#include "../simline.h"
+#include "../vehicle/vehicle.h"
 #include "../network/network_cmd_ingame.h" // for dragging raise / lower tools
 
 #include "../builder/tunnelbauer.h"
@@ -8974,6 +8976,149 @@ bool tool_work_world_t::init(player_t*)
 		return false;	// unsafe tools must return false even on success!
 	}
 	return false;
+}
+
+
+// ---- tool_line_route_overlay_t: a line's real route drawn on the main map -------------------
+// Two independent channels (prissi, forum 24000): the route PATH is drawn procedurally by the map
+// view from welt->get_line_route_overlay() in the owning player's colour, and the scheduled STOPS
+// keep the existing obj_t::highlight bit (their own colour) so they stay distinguishable and
+// selectable. Because the route no longer touches the highlight bit, it can no longer collide with
+// the schedule-stop highlight. Display-only, transient: nothing here is saved.
+// The stop tiles currently highlighted (kept so we can clear exactly them, no map scan).
+static vector_tpl<koord3d> line_route_overlay_stops;
+
+uint32 tool_line_route_overlay_t::calc_route_call_count = 0;
+uint32 tool_line_route_overlay_t::last_segments_attempted = 0;
+uint32 tool_line_route_overlay_t::last_segments_valid = 0;
+uint32 tool_line_route_overlay_t::last_segments_failed = 0;
+uint32 tool_line_route_overlay_t::last_route_tiles = 0;
+
+// Set/clear the obj_t::highlight on the STOP tiles only (the route path is drawn, not flagged).
+static void line_route_apply_stop_highlight(bool marking)
+{
+	karte_t *welt = world();
+	for(  koord3d const& pos : line_route_overlay_stops  ) {
+		grund_t *gr = welt->lookup(pos);
+		if(  gr == NULL  ) {
+			continue;
+		}
+		for(  uint idx = 0;  idx < gr->obj_count();  idx++  ) {
+			obj_t *obj = gr->obj_bei(idx);
+			if(  marking  ) {
+				if(  !obj->is_moving()  ) {
+					obj->set_flag( obj_t::highlight );
+				}
+			}
+			else {
+				obj->clear_flag( obj_t::highlight );
+			}
+		}
+		if(  gr->is_water()  ||  gr->ist_natur()  ) {
+			if(  marking  ) {
+				gr->set_flag( grund_t::marked );
+			}
+			else {
+				gr->clear_flag( grund_t::marked );
+			}
+		}
+		gr->set_flag( grund_t::dirty );
+	}
+}
+
+// Compute the line's real path leg by leg and store it, in order, in welt->access_line_route_overlay()
+// for the view to draw; also collect the scheduled stop tiles. The test driver is the line's first
+// convoy's lead vehicle (it *is* a test_driver_t), so the trace honours that convoy's waytype,
+// electrification and one-way rules. This runs during a step (from the command queue), never in the
+// display loop: the A* node array is static and not reentrant.
+static void line_route_compute(linehandle_t line)
+{
+	karte_t *welt = world();
+	vector_tpl<koord3d>& path = welt->access_line_route_overlay();
+	tool_line_route_overlay_t::calc_route_call_count++;
+	tool_line_route_overlay_t::last_segments_attempted = 0;
+	tool_line_route_overlay_t::last_segments_valid     = 0;
+	tool_line_route_overlay_t::last_segments_failed    = 0;
+	tool_line_route_overlay_t::last_route_tiles         = 0;
+	path.clear();
+	line_route_overlay_stops.clear();
+	if(  !line.is_bound()  ||  line->count_convoys() == 0  ) {
+		return;
+	}
+	convoihandle_t cnv = line->get_convoy(0);
+	if(  !cnv.is_bound()  ||  cnv->get_vehicle_count() == 0  ) {
+		return;
+	}
+	schedule_t *schedule = line->get_schedule();
+	if(  schedule == NULL  ||  schedule->get_count() < 2  ) {
+		return;
+	}
+	// stops keep their own highlight channel: remember the schedule entry tiles
+	for(  uint8 i = 0;  i < schedule->get_count();  i++  ) {
+		line_route_overlay_stops.append_unique( schedule->entries[i].pos );
+	}
+	// route colour = owning player's colour (per-company distinct, minimap convention)
+	if(  line->get_owner()  ) {
+		welt->set_line_route_overlay_color( line->get_owner()->get_player_color1() + 1 );
+	}
+	vehicle_t *test_driver = cnv->front();
+	const sint32 max_speed = cnv->get_min_top_speed();
+	const uint8 count = schedule->get_count();
+	route_t seg;
+	// the schedule is cyclic, so also connect the last entry back to the first
+	for(  uint8 i = 0;  i < count;  i++  ) {
+		const koord3d start = schedule->entries[i].pos;
+		const koord3d ziel  = schedule->entries[(i+1)%count].pos;
+		if(  start == ziel  ) {
+			continue; // repeated stop: zero-length leg
+		}
+		tool_line_route_overlay_t::last_segments_attempted++;
+		if(  seg.calc_route(welt, start, ziel, test_driver, max_speed, 0) != route_t::no_route  ) {
+			tool_line_route_overlay_t::last_segments_valid++;
+			// keep the path ORDERED (not deduped) so the view can draw tile-to-tile segments;
+			// only drop a tile equal to the previous one (leg boundaries share the stop tile)
+			for(  uint32 n = 0;  n < seg.get_count();  n++  ) {
+				const koord3d t = seg.at(n);
+				if(  path.get_count() == 0  ||  path[path.get_count()-1] != t  ) {
+					path.append( t );
+				}
+			}
+		}
+		else {
+			tool_line_route_overlay_t::last_segments_failed++;
+		}
+	}
+	tool_line_route_overlay_t::last_route_tiles = path.get_count();
+}
+
+bool tool_line_route_overlay_t::init(player_t*)
+{
+	karte_t *welt = world();
+	// default_param: "s,<line_id>" show that line's route, "c" (or anything else) clear
+	const char *p = default_param;
+	while(  p  &&  *p  &&  *p <= ' '  ) {
+		p++;
+	}
+	const char cmd = (p  &&  *p) ? *p : 'c';
+
+	// always clear the previous overlay first (stop highlights + drawn path)
+	line_route_apply_stop_highlight( false );
+	line_route_overlay_stops.clear();
+	welt->access_line_route_overlay().clear();
+
+	if(  cmd == 's'  ) {
+		// skip up to and past the comma to reach the id
+		while(  *p  &&  *p++ != ','  ) {
+		}
+		linehandle_t line;
+		line.set_id( (uint16)atoi(p) );
+		if(  line.is_bound()  ) {
+			line_route_compute( line );
+			line_route_apply_stop_highlight( true );
+		}
+	}
+	welt->set_dirty(); // repaint so the drawn route appears / disappears
+	return false; // unsafe tools must return false
 }
 
 

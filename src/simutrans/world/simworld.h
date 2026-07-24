@@ -173,6 +173,15 @@ private:
 	/** @} */
 
 	/**
+	 * Ordered tiles of the line-route overlay currently shown on the main map (display only, never
+	 * saved). Filled by tool_line_route_overlay_t during a step; drawn by the map view. Empty when
+	 * no overlay is shown. See tool_line_route_overlay_t.
+	 */
+	vector_tpl<koord3d> line_route_overlay;
+	/// Colour index (player colour) the overlay route is drawn in.
+	uint8 line_route_overlay_color;
+
+	/**
 	 * Time when last mouse moved to check for ambient sound events.
 	 */
 	uint32 mouse_rest_time;
@@ -718,6 +727,12 @@ public:
 	 * @return The active mouse cursor.
 	 */
 	zeiger_t * get_zeiger() const { return zeiger; }
+
+	/// Ordered tiles of the line-route overlay (display only). Written by the overlay tool, read by the view.
+	const vector_tpl<koord3d>& get_line_route_overlay() const { return line_route_overlay; }
+	vector_tpl<koord3d>& access_line_route_overlay() { return line_route_overlay; }
+	uint8 get_line_route_overlay_color() const { return line_route_overlay_color; }
+	void set_line_route_overlay_color(uint8 c) { line_route_overlay_color = c; }
 
 	/**
 	 * Marks an area using the grund_t mark flag.

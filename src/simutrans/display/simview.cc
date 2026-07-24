@@ -305,12 +305,20 @@ void main_view_t::display(bool force_dirty)
 	{
 		const vector_tpl<koord3d>& route = welt->get_line_route_overlay();
 		if(  route.get_count() > 1  ) {
-			const PIXVAL col = gfx->palette_lookup( welt->get_line_route_overlay_color() );
+			// Two coherent shades derived once per frame from the owning player's colour ramp: a bright
+			// core (ramp base + the GUI "bright" offset) that stays legible on dark terrain, and a
+			// neutral-dark outline that separates the stroke from light terrain. The stored colour is
+			// player_color1 + 1 (see tool_line_route_overlay_t), so ramp base = stored - 1. No new
+			// setting is introduced; this only reuses the existing player-colour ramp.
+			const palette_index_t col_idx = welt->get_line_route_overlay_color();
+			const PIXVAL col_main = gfx->palette_lookup( (palette_index_t)(col_idx - 1 + env_t::gui_player_color_bright) );
+			const PIXVAL col_halo = gfx->palette_lookup( COL_BLACK );
 			const sint8 lane_sign = welt->get_settings().is_drive_left() ? 1 : -1;
-			// tile-centre anchor (screen pixels): get_screen_coord(pos) lands near the tile top, so
-			// drop to the way surface. Half a tile across, ~5/8 down onto the road plane.
+			// tile-centre anchor (screen pixels): half a tile across and ~19/32 down, so the stroke
+			// rests on the way surface (near the engine's own on-way signal anchor of 9/16) instead of
+			// floating above it.
 			const scr_coord_val cx = IMG_SIZE/2;
-			const scr_coord_val cy = (IMG_SIZE*5)/8;
+			const scr_coord_val cy = (IMG_SIZE*19)/32;
 			for(  uint32 i = 1;  i < route.get_count();  i++  ) {
 				const koord3d a = route[i-1];
 				const koord3d b = route[i];
@@ -324,7 +332,17 @@ void main_view_t::display(bool force_dirty)
 				const scr_coord_val ly = tile_raster_scale_y( lane_sign * vehicle_base_t::get_driveleft_base_offset(dir,1), IMG_SIZE );
 				const scr_coord pa = viewport->get_screen_coord( a ) + scr_coord( cx + lx, cy + ly );
 				const scr_coord pb = viewport->get_screen_coord( b ) + scr_coord( cx + lx, cy + ly );
-				gfx->draw_line( pa.x, pa.y, pb.x, pb.y, col );
+				// A two-pixel bright core wrapped by a one-pixel dark outline above and below: a cheap
+				// vertical halo that reads cleanly on Simutrans' iso, mostly-diagonal way strokes.
+				gfx->draw_line( pa.x, pa.y - 1, pb.x, pb.y - 1, col_halo );
+				gfx->draw_line( pa.x, pa.y + 2, pb.x, pb.y + 2, col_halo );
+				gfx->draw_line( pa.x, pa.y,     pb.x, pb.y,     col_main );
+				gfx->draw_line( pa.x, pa.y + 1, pb.x, pb.y + 1, col_main );
+				// Round the joins and ends: a small core dot at each segment end bridges the small
+				// lane-offset step between adjacent segments at a turn (they sit on slightly different
+				// lanes) and gives the route rounded caps instead of hard square ends.
+				gfx->draw_filled_circle( pa.x, pa.y, 1, col_main );
+				gfx->draw_filled_circle( pb.x, pb.y, 1, col_main );
 			}
 		}
 	}

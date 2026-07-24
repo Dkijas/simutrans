@@ -317,32 +317,66 @@ void main_view_t::display(bool force_dirty)
 			// tile-centre anchor (screen pixels): half a tile across and ~19/32 down, so the stroke
 			// rests on the way surface (near the engine's own on-way signal anchor of 9/16) instead of
 			// floating above it.
-			const scr_coord_val cx = IMG_SIZE/2;
-			const scr_coord_val cy = (IMG_SIZE*19)/32;
+			// tile-centre anchor (screen pixels): half a tile across, ~19/32 down onto the way surface.
+			const scr_coord band( IMG_SIZE/2, (IMG_SIZE*19)/32 );
+
+			// Two route tiles are one leg only if they are 8-neighbours and distinct; anything else is a
+			// break in the route and ends the stroke (never bevel across a gap).
+			auto adjacent = []( const koord3d& p, const koord3d& q ) -> bool {
+				const koord dd = q.get_2d() - p.get_2d();
+				return dd.x >= -1  &&  dd.x <= 1  &&  dd.y >= -1  &&  dd.y <= 1  &&  ( dd.x != 0  ||  dd.y != 0 );
+			};
+			// Screen direction 0..7 of a leg, or -1 if the two tiles are not a valid adjacent leg.
+			auto leg_dir = [&]( const koord3d& p, const koord3d& q ) -> int {
+				return adjacent( p, q ) ? (int)ribi_t::get_dir( ribi_type( p, q ) ) : -1;
+			};
+			// Coherent lane offset (screen px, zoom- and driving-side-scaled) at the node where a leg
+			// travelling leg_d meets the other leg other_d (-1 if none). An endpoint or a 180 reversal
+			// keeps this leg's own antisymmetric side, so outward and return stay on opposite parallel
+			// lanes (joined by a short U-cap); any other turn bevels to the integer average of the two
+			// laterals, so BOTH segments meeting at the node resolve to the SAME point -> no crossing,
+			// no gap. On a straight run the two directions are equal, so the average is a no-op.
+			auto node_off = [&]( int leg_d, int other_d ) -> scr_coord {
+				sint8 bx = vehicle_base_t::get_driveleft_base_offset( leg_d, 0 );
+				sint8 by = vehicle_base_t::get_driveleft_base_offset( leg_d, 1 );
+				if(  other_d >= 0  &&  other_d != ( ( leg_d + 4 ) & 7 )  ) {
+					bx = (sint8)( ( bx + vehicle_base_t::get_driveleft_base_offset( other_d, 0 ) ) / 2 );
+					by = (sint8)( ( by + vehicle_base_t::get_driveleft_base_offset( other_d, 1 ) ) / 2 );
+				}
+				return scr_coord( tile_raster_scale_x( lane_sign * bx, IMG_SIZE ),
+				                  tile_raster_scale_y( lane_sign * by, IMG_SIZE ) );
+			};
+			// One 4-px band: a 1-px black outline above and below a 2-px bright core, between two points.
+			auto stroke = [&]( const scr_coord& p, const scr_coord& q ) {
+				gfx->draw_line( p.x, p.y - 1, q.x, q.y - 1, col_halo );
+				gfx->draw_line( p.x, p.y + 2, q.x, q.y + 2, col_halo );
+				gfx->draw_line( p.x, p.y,     q.x, q.y,     col_main );
+				gfx->draw_line( p.x, p.y + 1, q.x, q.y + 1, col_main );
+			};
+
 			for(  uint32 i = 1;  i < route.get_count();  i++  ) {
 				const koord3d a = route[i-1];
 				const koord3d b = route[i];
-				const koord d = b.get_2d() - a.get_2d();
-				if(  d.x < -1  ||  d.x > 1  ||  d.y < -1  ||  d.y > 1  ) {
+				const int dir = leg_dir( a, b );
+				if(  dir < 0  ) {
 					continue; // not adjacent tiles: leg gap / broken leg -> no stroke across it
 				}
-				// lane offset for this segment's travel direction (base-64 units, scaled to zoom)
-				const uint8 dir = ribi_t::get_dir( ribi_type( a, b ) );
-				const scr_coord_val lx = tile_raster_scale_x( lane_sign * vehicle_base_t::get_driveleft_base_offset(dir,0), IMG_SIZE );
-				const scr_coord_val ly = tile_raster_scale_y( lane_sign * vehicle_base_t::get_driveleft_base_offset(dir,1), IMG_SIZE );
-				const scr_coord pa = viewport->get_screen_coord( a ) + scr_coord( cx + lx, cy + ly );
-				const scr_coord pb = viewport->get_screen_coord( b ) + scr_coord( cx + lx, cy + ly );
-				// A two-pixel bright core wrapped by a one-pixel dark outline above and below: a cheap
-				// vertical halo that reads cleanly on Simutrans' iso, mostly-diagonal way strokes.
-				gfx->draw_line( pa.x, pa.y - 1, pb.x, pb.y - 1, col_halo );
-				gfx->draw_line( pa.x, pa.y + 2, pb.x, pb.y + 2, col_halo );
-				gfx->draw_line( pa.x, pa.y,     pb.x, pb.y,     col_main );
-				gfx->draw_line( pa.x, pa.y + 1, pb.x, pb.y + 1, col_main );
-				// Round the joins and ends: a small core dot at each segment end bridges the small
-				// lane-offset step between adjacent segments at a turn (they sit on slightly different
-				// lanes) and gives the route rounded caps instead of hard square ends.
+				// Resolve the lane offset at each end per NODE, from both legs meeting there, so a turn
+				// bevels to a single shared point instead of two segments crossing the centre line (the
+				// old per-segment offset produced an X at corners and at there-and-back reversals).
+				const int dir_prev = ( i >= 2 ) ? leg_dir( route[i-2], a ) : -1;
+				const int dir_next = ( i + 1 < route.get_count() ) ? leg_dir( b, route[i+1] ) : -1;
+				const scr_coord pa = viewport->get_screen_coord( a ) + band + node_off( dir, dir_prev );
+				const scr_coord pb = viewport->get_screen_coord( b ) + band + node_off( dir, dir_next );
+				stroke( pa, pb );
+				// rounded caps; the end dot also hides any 1-px rasterisation gap at a bevel node
 				gfx->draw_filled_circle( pa.x, pa.y, 1, col_main );
 				gfx->draw_filled_circle( pb.x, pb.y, 1, col_main );
+				// 180 reversal at b (there-and-back turnaround): the return leg starts on the opposite
+				// lane; a short U-cap across the road joins the two parallel lanes into one route.
+				if(  dir_next >= 0  &&  dir_next == ( ( dir + 4 ) & 7 )  ) {
+					stroke( pb, viewport->get_screen_coord( b ) + band + node_off( dir_next, dir ) );
+				}
 			}
 		}
 	}

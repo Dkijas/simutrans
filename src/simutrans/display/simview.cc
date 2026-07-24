@@ -6,6 +6,9 @@
 #include <stdio.h>
 
 #include "../world/simworld.h"
+
+#include "../dataobj/ribi.h"          // line-route overlay: travel direction per segment
+#include "../vehicle/vehicle_base.h"  // line-route overlay: reuse the lane offset table
 #include "simview.h"
 #include "simgraph.h"
 #include "viewport.h"
@@ -294,13 +297,20 @@ void main_view_t::display(bool force_dirty)
 		}
 	}
 
-	// line-route overlay: draw the selected line's real path as a procedural stroke in the owning
-	// player's colour (display only). The scheduled stops keep their own obj_t::highlight channel,
-	// so the route no longer collides with the schedule-stop highlight.
+	// line-route overlay: draw the selected line's real path as directional lane strokes in the
+	// owning player's colour (display only). Each segment is shifted toward the lane used for its
+	// own travel direction (driving-side aware); because the lane table is antisymmetric, the
+	// outward and return legs land on opposite lanes automatically. The scheduled stops keep their
+	// own obj_t::highlight channel, so the route never collides with the schedule-stop highlight.
 	{
 		const vector_tpl<koord3d>& route = welt->get_line_route_overlay();
 		if(  route.get_count() > 1  ) {
 			const PIXVAL col = gfx->palette_lookup( welt->get_line_route_overlay_color() );
+			const sint8 lane_sign = welt->get_settings().is_drive_left() ? 1 : -1;
+			// tile-centre anchor (screen pixels): get_screen_coord(pos) lands near the tile top, so
+			// drop to the way surface. Half a tile across, ~5/8 down onto the road plane.
+			const scr_coord_val cx = IMG_SIZE/2;
+			const scr_coord_val cy = (IMG_SIZE*5)/8;
 			for(  uint32 i = 1;  i < route.get_count();  i++  ) {
 				const koord3d a = route[i-1];
 				const koord3d b = route[i];
@@ -308,8 +318,12 @@ void main_view_t::display(bool force_dirty)
 				if(  d.x < -1  ||  d.x > 1  ||  d.y < -1  ||  d.y > 1  ) {
 					continue; // not adjacent tiles: leg gap / broken leg -> no stroke across it
 				}
-				const scr_coord pa = viewport->get_screen_coord( a ) + scr_coord( IMG_SIZE/2, IMG_SIZE/2 );
-				const scr_coord pb = viewport->get_screen_coord( b ) + scr_coord( IMG_SIZE/2, IMG_SIZE/2 );
+				// lane offset for this segment's travel direction (base-64 units, scaled to zoom)
+				const uint8 dir = ribi_t::get_dir( ribi_type( a, b ) );
+				const scr_coord_val lx = tile_raster_scale_x( lane_sign * vehicle_base_t::get_driveleft_base_offset(dir,0), IMG_SIZE );
+				const scr_coord_val ly = tile_raster_scale_y( lane_sign * vehicle_base_t::get_driveleft_base_offset(dir,1), IMG_SIZE );
+				const scr_coord pa = viewport->get_screen_coord( a ) + scr_coord( cx + lx, cy + ly );
+				const scr_coord pb = viewport->get_screen_coord( b ) + scr_coord( cx + lx, cy + ly );
 				gfx->draw_line( pa.x, pa.y, pb.x, pb.y, col );
 			}
 		}

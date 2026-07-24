@@ -104,6 +104,11 @@ public:
 
 	static void set_overtaking_offsets( bool driving_on_the_left );
 
+	// Per screen-direction (ribi_t::get_dir 0..7) lane offset in base-64 pixel units, used by
+	// vehicles to shift to the left-hand lane. The table is antisymmetric (offset[opposite] ==
+	// -offset), so the line-route overlay reuses it to draw outward and return on opposite lanes.
+	static sint8 get_driveleft_base_offset( uint8 dir, uint8 axis ) { return driveleft_base_offsets[dir & 7][axis & 1]; }
+
 	// if true, this convoi needs to restart for correct alignment
 	bool need_realignment() const;
 

@@ -1780,12 +1780,25 @@ int simu_main(int argc, char** argv)
 					line_management_gui_t *lw = new line_management_gui_t( line, line->get_owner(), 1 );
 					create_win( lw, w_info, magic );
 					win_set_pos( lw, scr_coord( 8, 40 ) ); // tuck the window into the corner, off the route
-					lw->toggle_route_overlay();
+					// show the overlay through the real product tool (the exact request the button makes)
+					{
+						char pbuf[16];
+						sprintf( pbuf, "s,%u", (unsigned)line.get_id() );
+						tool_t *rt = create_tool( TOOL_LINE_ROUTE_OVERLAY | SIMPLE_TOOL );
+						rt->set_default_param( pbuf );
+						welt->set_tool( rt, line->get_owner() );
+						delete rt;
+					}
 					welt->set_dirty();
 					view->display( true );
 					intr_refresh_display( true );
 					gfx->take_screenshot( scr_rect( scr_coord(0,0), gfx->get_screen_size() ) );
-					lw->toggle_route_overlay();
+					{
+						tool_t *rt = create_tool( TOOL_LINE_ROUTE_OVERLAY | SIMPLE_TOOL );
+						rt->set_default_param( "c" );
+						welt->set_tool( rt, line->get_owner() );
+						delete rt;
+					}
 					destroy_win( magic );
 					shot++;
 				}

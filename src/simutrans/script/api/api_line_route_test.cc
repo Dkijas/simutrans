@@ -8,15 +8,15 @@
 /** @file api_line_route_test.cc
  * Test/demo-only hooks for the "Show route on map" line-route overlay.
  *
- * These drive the overlay through its REAL code path: they create the actual line
- * management window (create_win), run the exact action the button runs
- * (line_management_gui_t::toggle_route_overlay), and close it (destroy_win -> WIN_CLOSE),
- * then expose the overlay's route-computation diagnostic counters so a headless scenario
- * can assert invariants. Tiles marked by the overlay are read back from Squirrel with the
- * existing tile_x.is_marked() / map_object_x.is_marked().
+ * These drive the overlay through its REAL code path: they create the actual line management
+ * window (create_win), issue the real product tool (TOOL_LINE_ROUTE_OVERLAY, the exact request
+ * the button makes), and close the window (destroy_win -> WIN_CLOSE), then read the overlay's real
+ * world-side state (route size, separators, stop count, shown-line id) so a headless scenario can
+ * assert invariants. No product method is exposed just for the harness. Tiles on the drawn route
+ * are read back with tile_x.is_route_marked().
  *
- * This is NOT part of the product feature. It is only registered when a scenario is running
- * and lives in its own file so it can be excluded from any upstream patch.
+ * This is NOT part of the product feature. It is only registered when a scenario is running and
+ * lives in its own file so it can be excluded from any upstream patch.
  */
 
 #include "../api_class.h"
@@ -29,7 +29,7 @@
 #include "../../player/simplay.h"
 #include "../../gui/line_management_gui.h"
 #include "../../gui/simwin.h"
-#include "../../tool/simtool.h" // tool_line_route_overlay_t diagnostic counters
+#include "../../tool/simmenu.h" // create_tool, TOOL_LINE_ROUTE_OVERLAY (issue the real product tool)
 #include "../../ground/grund.h"
 #include "../../tpl/vector_tpl.h"
 #include "../../dataobj/koord3d.h"
@@ -64,22 +64,31 @@ static SQInteger lrt_open(HSQUIRRELVM vm)
 }
 
 
-// Run the exact button action (toggle) on the already-open window.
+// Toggle the overlay for this line through the REAL product tool (exactly what the button issues):
+// show this line's route if it is not the one currently shown, otherwise clear. No GUI internals.
 static SQInteger lrt_click(HSQUIRRELVM vm)
 {
 	linehandle_t line = param<linehandle_t>::get(vm, 1);
 	if(  line.is_bound()  ) {
-		gui_frame_t *w = win_get_magic( line_win_magic(line) );
-		// identify the line window by its rdwr id (no dynamic_cast, matching engine style)
-		if(  w  &&  w->get_rdwr_id() == magic_line_schedule_rdwr_dummy  ) {
-			static_cast<line_management_gui_t*>(w)->toggle_route_overlay();
+		karte_t *welt = world();
+		const bool already_shown = ( welt->get_line_route_overlay_line() == line );
+		char param_buf[16];
+		if(  !already_shown  ) {
+			sprintf( param_buf, "s,%u", (unsigned)line.get_id() );
 		}
+		else {
+			sprintf( param_buf, "c" );
+		}
+		tool_t *tool = create_tool( TOOL_LINE_ROUTE_OVERLAY | SIMPLE_TOOL );
+		tool->set_default_param( param_buf );
+		welt->set_tool( tool, line->get_owner() );
+		delete tool;
 	}
 	return 0;
 }
 
 
-// Close the real window (fires WIN_CLOSE, which clears the overlay).
+// Close the real window (fires WIN_CLOSE, which clears the overlay only if this line owns it).
 static SQInteger lrt_close(HSQUIRRELVM vm)
 {
 	linehandle_t line = param<linehandle_t>::get(vm, 1);
@@ -91,7 +100,7 @@ static SQInteger lrt_close(HSQUIRRELVM vm)
 
 
 // tile_x.is_route_marked(): is this tile part of the drawn line-route overlay path? The route is
-// now drawn procedurally (not via the highlight bit), so the bench verifies it through this query.
+// drawn procedurally (not via the highlight bit), so the bench verifies it through this query.
 static bool tile_in_route_overlay(grund_t *gr)
 {
 	if(  gr == NULL  ) {
@@ -107,14 +116,40 @@ static bool tile_in_route_overlay(grund_t *gr)
 }
 
 
-static SQInteger lrt_calc_count(HSQUIRRELVM vm)         { sq_pushinteger(vm, (SQInteger)tool_line_route_overlay_t::calc_route_call_count);     return 1; }
-static SQInteger lrt_segments_attempted(HSQUIRRELVM vm) { sq_pushinteger(vm, (SQInteger)tool_line_route_overlay_t::last_segments_attempted);   return 1; }
-static SQInteger lrt_segments_valid(HSQUIRRELVM vm)     { sq_pushinteger(vm, (SQInteger)tool_line_route_overlay_t::last_segments_valid);       return 1; }
-static SQInteger lrt_segments_failed(HSQUIRRELVM vm)    { sq_pushinteger(vm, (SQInteger)tool_line_route_overlay_t::last_segments_failed);      return 1; }
-static SQInteger lrt_tiles(HSQUIRRELVM vm)              { sq_pushinteger(vm, (SQInteger)tool_line_route_overlay_t::last_route_tiles);          return 1; }
+// Real world-side overlay state (product, not harness telemetry): route tile count, whether the
+// route contains an explicit break separator, the number of highlighted stop tiles, and the id of
+// the line currently shown (0 = none).
+static SQInteger lrt_overlay_size(HSQUIRRELVM vm)  { sq_pushinteger(vm, (SQInteger)world()->get_line_route_overlay().get_count());       return 1; }
+static SQInteger lrt_stop_count(HSQUIRRELVM vm)    { sq_pushinteger(vm, (SQInteger)world()->get_line_route_overlay_stops().get_count()); return 1; }
+static SQInteger lrt_active_line_id(HSQUIRRELVM vm)
+{
+	const linehandle_t l = world()->get_line_route_overlay_line();
+	sq_pushinteger(vm, (SQInteger)( l.is_bound() ? l.get_id() : 0 ));
+	return 1;
+}
+static SQInteger lrt_has_separator(HSQUIRRELVM vm)
+{
+	bool sep = false;
+	for(  koord3d const& p : world()->get_line_route_overlay()  ) {
+		if(  p == koord3d::invalid  ) {
+			sep = true;
+			break;
+		}
+	}
+	sq_pushbool(vm, sep);
+	return 1;
+}
+// Is THIS line the one currently shown? This is exactly the button's source of truth (karte_t), so
+// the bench can assert per-window button state without reading the GUI.
+static SQInteger lrt_is_active(HSQUIRRELVM vm)
+{
+	linehandle_t line = param<linehandle_t>::get(vm, 1);
+	sq_pushbool(vm, line.is_bound()  &&  world()->get_line_route_overlay_line() == line);
+	return 1;
+}
 
 
-// Save the current world to a .sve for the persistent demo game (Phase 7).
+// Save the current world to a .sve for the persistent demo game.
 static SQInteger lrt_save(HSQUIRRELVM vm)
 {
 	const char *fn = param<const char*>::get(vm, 2);
@@ -136,19 +171,19 @@ void export_line_route_test(HSQUIRRELVM vm, bool scenario)
 	}
 	begin_class(vm, "line_x", 0);
 
-	register_function(vm, &lrt_open,               "test_route_open",               1, param<linehandle_t>::typemask());
-	register_function(vm, &lrt_click,              "test_route_click",              1, param<linehandle_t>::typemask());
-	register_function(vm, &lrt_close,              "test_route_close",              1, param<linehandle_t>::typemask());
-	register_function(vm, &lrt_calc_count,         "test_route_calc_count",         1, param<linehandle_t>::typemask());
-	register_function(vm, &lrt_segments_attempted, "test_route_segments_attempted", 1, param<linehandle_t>::typemask());
-	register_function(vm, &lrt_segments_valid,     "test_route_segments_valid",     1, param<linehandle_t>::typemask());
-	register_function(vm, &lrt_segments_failed,    "test_route_segments_failed",    1, param<linehandle_t>::typemask());
-	register_function(vm, &lrt_tiles,              "test_route_tiles",              1, param<linehandle_t>::typemask());
-	register_function(vm, &lrt_save,               "test_route_save_game",          2, "x s");
+	register_function(vm, &lrt_open,            "test_route_open",         1, param<linehandle_t>::typemask());
+	register_function(vm, &lrt_click,           "test_route_click",        1, param<linehandle_t>::typemask());
+	register_function(vm, &lrt_close,           "test_route_close",        1, param<linehandle_t>::typemask());
+	register_function(vm, &lrt_overlay_size,    "test_route_overlay_size", 1, param<linehandle_t>::typemask());
+	register_function(vm, &lrt_stop_count,      "test_route_stop_count",   1, param<linehandle_t>::typemask());
+	register_function(vm, &lrt_active_line_id,  "test_route_active_line",  1, param<linehandle_t>::typemask());
+	register_function(vm, &lrt_is_active,       "test_route_is_active",    1, param<linehandle_t>::typemask());
+	register_function(vm, &lrt_has_separator,   "test_route_has_separator",1, param<linehandle_t>::typemask());
+	register_function(vm, &lrt_save,            "test_route_save_game",    2, "x s");
 
 	end_class(vm);
 
-	// tile_x.is_route_marked(): read back the drawn route overlay (path now procedural, not flagged)
+	// tile_x.is_route_marked(): read back the drawn route overlay (path is procedural, not flagged)
 	begin_class(vm, "tile_x", 0);
 	register_method(vm, &tile_in_route_overlay, "is_route_marked", true);
 	end_class(vm);

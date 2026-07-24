@@ -1051,12 +1051,6 @@ public:
 	bool init(player_t*) OVERRIDE;
 	bool is_init_keeps_game_state() const OVERRIDE { return false; }
 	bool is_work_keeps_game_state() const OVERRIDE { return false; }
-	// diagnostic counters for the automated demo/test harness (last computation + total passes)
-	static uint32 calc_route_call_count;
-	static uint32 last_segments_attempted;
-	static uint32 last_segments_valid;
-	static uint32 last_segments_failed;
-	static uint32 last_route_tiles;
 };
 
 class tool_rotate90_t : public tool_t {

@@ -52,11 +52,11 @@ class line_management_gui_t : public gui_frame_t, public action_listener_t
 	button_t bt_show_route;
 	gui_scrolled_list_t scrolly_convois, scrolly_halts;
 
-	// Overlay: real route of the line drawn on the main map (proto/line-route-overlay).
-	// The window only tracks whether the overlay is shown; the actual route calculation and the
-	// highlighting are done by tool_line_route_overlay_t during a proper step (not in GUI code /
-	// sync_step). The button just issues a request to that tool.
-	bool route_shown;
+	// The "Show route on map" button action: issue a request to tool_line_route_overlay_t (the route
+	// is computed and highlighted in a proper step, never in GUI code / sync_step). Whether this
+	// line's overlay is currently shown is read from karte_t, not stored here, so two line windows
+	// stay consistent.
+	void toggle_route_overlay();
 
 	gui_aligned_container_t container_schedule, container_stats, container_convois, container_halts;
 
@@ -98,12 +98,6 @@ public:
 	bool infowin_event( const event_t *ev ) OVERRIDE;
 
 	uint32 get_rdwr_id() OVERRIDE { return magic_line_schedule_rdwr_dummy; }
-
-	// The action behind the "Show route on map" button, shared by the button handler and the
-	// automated demo/test harness so both run the identical code path (api_line_route_test.cc).
-	// It only issues a request to tool_line_route_overlay_t; the diagnostic counters now live on
-	// that tool.
-	void toggle_route_overlay();
 };
 
 #endif

@@ -97,7 +97,6 @@ line_management_gui_t::line_management_gui_t( linehandle_t line_, player_t* play
 	loading_info( &loading_text )
 {
 	is_saving_gui = false;
-	route_shown = false;
 	set_table_layout( 3, 0 );
 	set_alignment(ALIGN_TOP);
 	line = line_;
@@ -121,8 +120,8 @@ line_management_gui_t::line_management_gui_t( linehandle_t line_, player_t* play
 	add_component( &loading_info, 2 );
 	loading_text.printf( translator::translate("Capacity: %s\nLoad: %d (%d%%)"), 0, 0, 0);
 
-	// MVP: toggle to draw the line's real route (engine pathfinder) on the main map.
-	// Kept in the always-visible header so it works from every tab.
+	// toggle: draw the line's real route (engine pathfinder) on the main map. In the always-visible
+	// header so it works from every tab.
 	bt_show_route.init( button_t::roundbox_state | button_t::flexible, "Show route on map" );
 	bt_show_route.set_tooltip( "Show the calculated route of this line on the main map." );
 	bt_show_route.add_listener( this );
@@ -249,7 +248,9 @@ void line_management_gui_t::draw(scr_coord pos, scr_size size)
 
 		// route overlay needs a convoy to act as the test driver
 		bt_show_route.enable( line->count_convoys() > 0 );
-		bt_show_route.pressed = route_shown;
+		// source of truth is the world: pressed iff this line is the one currently shown, so opening a
+		// second line window (or another window showing a different line) reflects the real state
+		bt_show_route.pressed = ( welt->get_line_route_overlay_line() == line );
 
 		if(  line->count_convoys() != old_convoi_count  ) {
 
@@ -418,18 +419,16 @@ void line_management_gui_t::apply_schedule()
 }
 
 
-// The whole action behind the "Show route on map" button. Extracted so the automated
-// demo/test harness can exercise the exact same code path as the button (see
-// api_line_route_test.cc). The GUI does NOT calculate the route here: it only issues a request
-// to tool_line_route_overlay_t, which runs the pathfinder during a proper step (not in sync_step)
-// and applies the highlight. "s,<id>" shows the line's route, "c" clears it.
+// The "Show route on map" button action. The GUI does NOT calculate the route: it only issues a
+// request to tool_line_route_overlay_t, which runs the pathfinder in a proper step (not in sync_step)
+// and applies the highlight. The world is the source of truth, so we toggle against it: if this line
+// already owns the overlay, clear it ("c"); otherwise show this line's route ("s,<id>").
 void line_management_gui_t::toggle_route_overlay()
 {
-	route_shown = !route_shown;
-	bt_show_route.pressed = route_shown;
+	const bool already_shown = ( welt->get_line_route_overlay_line() == line );
 	tool_t *tool = create_tool( TOOL_LINE_ROUTE_OVERLAY | SIMPLE_TOOL );
 	cbuffer_t buf;
-	if(  route_shown  &&  line.is_bound()  ) {
+	if(  !already_shown  &&  line.is_bound()  ) {
 		buf.printf( "s,%u", line.get_id() );
 	}
 	else {
@@ -559,15 +558,15 @@ bool line_management_gui_t::infowin_event( const event_t *ev )
 		}
 		scd.highlight_schedule( false );
 		minimap_t::get_instance()->set_selected_cnv(convoihandle_t());
-		// clear our route overlay so no highlight flags are left on the world (via the tool, so the
-		// clear happens in a proper step); skip when the game itself is closing down
-		if(  route_shown  &&  !is_saving_gui  ) {
+		// clear the route overlay so no highlight flags are left on the world (via the tool, so the
+		// clear happens in a proper step) -- but ONLY if this window's line is the one currently shown,
+		// so closing a line window never wipes another window's overlay; skip on game shutdown
+		if(  !is_saving_gui  &&  welt->get_line_route_overlay_line() == line  ) {
 			tool_t *tool = create_tool( TOOL_LINE_ROUTE_OVERLAY | SIMPLE_TOOL );
 			tool->set_default_param( "c" );
 			welt->set_tool( tool, player );
 			delete tool;
 		}
-		route_shown = false;
 	}
 
 	if(  ev->ev_class == INFOWIN  &&  ev->ev_code == WIN_TOP  ) {

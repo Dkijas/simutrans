@@ -13,6 +13,7 @@
 
 #include "../convoihandle.h"
 #include "../halthandle.h"
+#include "../linehandle.h"
 
 #include "../tpl/weighted_vector_tpl.h"
 #include "../tpl/array2d_tpl.h"
@@ -173,12 +174,16 @@ private:
 	/** @} */
 
 	/**
-	 * Ordered tiles of the line-route overlay currently shown on the main map (display only, never
-	 * saved). Filled by tool_line_route_overlay_t during a step; drawn by the map view. Empty when
-	 * no overlay is shown. See tool_line_route_overlay_t.
+	 * Line-route overlay currently shown on the main map (display only, never saved). Three parts,
+	 * always cleared together by clear_line_route_overlay(): the ordered route tiles the view draws
+	 * (koord3d::invalid marks a break between routable sub-legs), the scheduled stop tiles that carry
+	 * the obj_t::highlight red highlight, and the identity of the line being shown (so a second line
+	 * window cannot clear the first one's overlay). Empty / unbound when no overlay is shown.
 	 */
 	vector_tpl<koord3d> line_route_overlay;
-	/// Colour index (player colour) the overlay route is drawn in.
+	vector_tpl<koord3d> line_route_overlay_stops;
+	linehandle_t line_route_overlay_line;
+	/// Colour index (owning player's colour ramp base) the overlay route is drawn in.
 	uint8 line_route_overlay_color;
 
 	/**
@@ -731,8 +736,19 @@ public:
 	/// Ordered tiles of the line-route overlay (display only). Written by the overlay tool, read by the view.
 	const vector_tpl<koord3d>& get_line_route_overlay() const { return line_route_overlay; }
 	vector_tpl<koord3d>& access_line_route_overlay() { return line_route_overlay; }
+	const vector_tpl<koord3d>& get_line_route_overlay_stops() const { return line_route_overlay_stops; }
+	vector_tpl<koord3d>& access_line_route_overlay_stops() { return line_route_overlay_stops; }
 	uint8 get_line_route_overlay_color() const { return line_route_overlay_color; }
 	void set_line_route_overlay_color(uint8 c) { line_route_overlay_color = c; }
+	linehandle_t get_line_route_overlay_line() const { return line_route_overlay_line; }
+	void set_line_route_overlay_line(linehandle_t l) { line_route_overlay_line = l; }
+	/**
+	 * Drop the whole line-route overlay: route tiles, stop tiles and the shown-line identity, and
+	 * reset the colour. When @p clear_highlight, also unset obj_t::highlight / grund_t::marked on the
+	 * current stop tiles (do this while the map is stable, e.g. on re-show or rotate90; skip it on
+	 * world teardown in init()/load(), where the tiles belong to the outgoing world). Display only.
+	 */
+	void clear_line_route_overlay( bool clear_highlight );
 
 	/**
 	 * Marks an area using the grund_t mark flag.

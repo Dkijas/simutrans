@@ -8985,42 +8985,25 @@ bool tool_work_world_t::init(player_t*)
 // keep the existing obj_t::highlight bit (their own colour) so they stay distinguishable and
 // selectable. Because the route no longer touches the highlight bit, it can no longer collide with
 // the schedule-stop highlight. Display-only, transient: nothing here is saved.
-// The stop tiles currently highlighted (kept so we can clear exactly them, no map scan).
-static vector_tpl<koord3d> line_route_overlay_stops;
-
-uint32 tool_line_route_overlay_t::calc_route_call_count = 0;
-uint32 tool_line_route_overlay_t::last_segments_attempted = 0;
-uint32 tool_line_route_overlay_t::last_segments_valid = 0;
-uint32 tool_line_route_overlay_t::last_segments_failed = 0;
-uint32 tool_line_route_overlay_t::last_route_tiles = 0;
-
-// Set/clear the obj_t::highlight on the STOP tiles only (the route path is drawn, not flagged).
-static void line_route_apply_stop_highlight(bool marking)
+// All transient overlay state (route tiles, stop tiles, shown-line identity, colour) lives on
+// karte_t and is dropped together by karte_t::clear_line_route_overlay(). This helper only SETS the
+// obj_t::highlight on the stop tiles collected there; clearing is owned by karte_t.
+static void line_route_set_stop_highlight()
 {
 	karte_t *welt = world();
-	for(  koord3d const& pos : line_route_overlay_stops  ) {
+	for(  koord3d const& pos : welt->get_line_route_overlay_stops()  ) {
 		grund_t *gr = welt->lookup(pos);
 		if(  gr == NULL  ) {
 			continue;
 		}
 		for(  uint idx = 0;  idx < gr->obj_count();  idx++  ) {
 			obj_t *obj = gr->obj_bei(idx);
-			if(  marking  ) {
-				if(  !obj->is_moving()  ) {
-					obj->set_flag( obj_t::highlight );
-				}
-			}
-			else {
-				obj->clear_flag( obj_t::highlight );
+			if(  !obj->is_moving()  ) {
+				obj->set_flag( obj_t::highlight );
 			}
 		}
 		if(  gr->is_water()  ||  gr->ist_natur()  ) {
-			if(  marking  ) {
-				gr->set_flag( grund_t::marked );
-			}
-			else {
-				gr->clear_flag( grund_t::marked );
-			}
+			gr->set_flag( grund_t::marked );
 		}
 		gr->set_flag( grund_t::dirty );
 	}
@@ -9035,13 +9018,7 @@ static void line_route_compute(linehandle_t line)
 {
 	karte_t *welt = world();
 	vector_tpl<koord3d>& path = welt->access_line_route_overlay();
-	tool_line_route_overlay_t::calc_route_call_count++;
-	tool_line_route_overlay_t::last_segments_attempted = 0;
-	tool_line_route_overlay_t::last_segments_valid     = 0;
-	tool_line_route_overlay_t::last_segments_failed    = 0;
-	tool_line_route_overlay_t::last_route_tiles         = 0;
-	path.clear();
-	line_route_overlay_stops.clear();
+	// path and stops were already emptied by clear_line_route_overlay() in init()
 	if(  !line.is_bound()  ||  line->count_convoys() == 0  ) {
 		return;
 	}
@@ -9055,11 +9032,11 @@ static void line_route_compute(linehandle_t line)
 	}
 	// stops keep their own highlight channel: remember the schedule entry tiles
 	for(  uint8 i = 0;  i < schedule->get_count();  i++  ) {
-		line_route_overlay_stops.append_unique( schedule->entries[i].pos );
+		welt->access_line_route_overlay_stops().append_unique( schedule->entries[i].pos );
 	}
-	// route colour = owning player's colour (per-company distinct, minimap convention)
+	// route colour = owning player's colour ramp base (per-company distinct, minimap convention)
 	if(  line->get_owner()  ) {
-		welt->set_line_route_overlay_color( line->get_owner()->get_player_color1() + 1 );
+		welt->set_line_route_overlay_color( line->get_owner()->get_player_color1() );
 	}
 	vehicle_t *test_driver = cnv->front();
 	const sint32 max_speed = cnv->get_min_top_speed();
@@ -9072,9 +9049,7 @@ static void line_route_compute(linehandle_t line)
 		if(  start == ziel  ) {
 			continue; // repeated stop: zero-length leg
 		}
-		tool_line_route_overlay_t::last_segments_attempted++;
 		if(  seg.calc_route(welt, start, ziel, test_driver, max_speed, 0) != route_t::no_route  ) {
-			tool_line_route_overlay_t::last_segments_valid++;
 			// keep the path ORDERED (not deduped) so the view can draw tile-to-tile segments;
 			// only drop a tile equal to the previous one (leg boundaries share the stop tile)
 			for(  uint32 n = 0;  n < seg.get_count();  n++  ) {
@@ -9084,11 +9059,16 @@ static void line_route_compute(linehandle_t line)
 				}
 			}
 		}
-		else {
-			tool_line_route_overlay_t::last_segments_failed++;
+		else if(  path.get_count() > 0  &&  path[path.get_count()-1] != koord3d::invalid  ) {
+			// leg could not be routed: push an explicit break so the view never joins the sub-route
+			// before it to the one after it (the bevel / U-cap must not cross this)
+			path.append( koord3d::invalid );
 		}
 	}
-	tool_line_route_overlay_t::last_route_tiles = path.get_count();
+	// a trailing break (the last leg failed) carries no segment: drop it to keep the vector tidy
+	if(  path.get_count() > 0  &&  path[path.get_count()-1] == koord3d::invalid  ) {
+		path.remove_at( path.get_count()-1 );
+	}
 }
 
 bool tool_line_route_overlay_t::init(player_t*)
@@ -9101,10 +9081,9 @@ bool tool_line_route_overlay_t::init(player_t*)
 	}
 	const char cmd = (p  &&  *p) ? *p : 'c';
 
-	// always clear the previous overlay first (stop highlights + drawn path)
-	line_route_apply_stop_highlight( false );
-	line_route_overlay_stops.clear();
-	welt->access_line_route_overlay().clear();
+	// always drop the previous overlay first: this un-highlights the old stop tiles and clears the
+	// route path, the stop list, the shown-line identity and the colour, all in one place
+	welt->clear_line_route_overlay( true );
 
 	if(  cmd == 's'  ) {
 		// skip up to and past the comma to reach the id
@@ -9114,7 +9093,15 @@ bool tool_line_route_overlay_t::init(player_t*)
 		line.set_id( (uint16)atoi(p) );
 		if(  line.is_bound()  ) {
 			line_route_compute( line );
-			line_route_apply_stop_highlight( true );
+			if(  welt->get_line_route_overlay().get_count() > 0  ) {
+				welt->set_line_route_overlay_line( line ); // this line now owns the overlay
+				line_route_set_stop_highlight();
+			}
+			else {
+				// nothing routable to show (no convoy / every leg broken): keep the overlay empty and
+				// unbound, dropping the stop tiles compute may have collected
+				welt->clear_line_route_overlay( false );
+			}
 		}
 	}
 	welt->set_dirty(); // repaint so the drawn route appears / disappears

@@ -1232,7 +1232,7 @@ void karte_t::init(settings_t* const sets, sint8 const* const h_field)
 	ticks = 0;
 	last_step_ticks = ticks;
 	schedule_counter = 0;
-	line_route_overlay.clear(); // display-only overlay: drop any route from a previous world
+	clear_line_route_overlay( false ); // display-only overlay: drop any route from the previous world
 	// ticks = 0x7FFFF800;  // Testing the 31->32 bit step
 
 	last_month = 0;
@@ -2363,6 +2363,31 @@ void karte_t::rotate90_plans(sint16 x_min, sint16 x_max, sint16 y_min, sint16 y_
 }
 
 
+void karte_t::clear_line_route_overlay( bool clear_highlight )
+{
+	if(  clear_highlight  ) {
+		// unset the schedule-stop highlight on exactly the tiles we marked (no map scan)
+		for(  koord3d const& pos : line_route_overlay_stops  ) {
+			grund_t *gr = lookup( pos );
+			if(  gr == NULL  ) {
+				continue;
+			}
+			for(  uint idx = 0;  idx < gr->obj_count();  idx++  ) {
+				gr->obj_bei( idx )->clear_flag( obj_t::highlight );
+			}
+			if(  gr->is_water()  ||  gr->ist_natur()  ) {
+				gr->clear_flag( grund_t::marked );
+			}
+			gr->set_flag( grund_t::dirty );
+		}
+	}
+	line_route_overlay.clear();
+	line_route_overlay_stops.clear();
+	line_route_overlay_line = linehandle_t();
+	line_route_overlay_color = 0;
+}
+
+
 void karte_t::rotate90()
 {
 DBG_MESSAGE( "karte_t::rotate90()", "called" );
@@ -2376,8 +2401,9 @@ DBG_MESSAGE( "karte_t::rotate90()", "called" );
 	zeiger->change_pos( koord3d::invalid );
 
 	// drop the line-route overlay: its stored tiles are pre-rotation coordinates (display only, the
-	// user re-shows the route to recompute it on the rotated map)
-	line_route_overlay.clear();
+	// user re-shows the route to recompute it on the rotated map). Un-highlight the stop tiles here,
+	// while their coordinates still match, so no red highlight is left on the rotated objects.
+	clear_line_route_overlay( true );
 
 	// preprocessing, detach stops from factories to prevent crash
 	for(halthandle_t const s : haltestelle_t::get_alle_haltestellen()) {
@@ -3820,7 +3846,7 @@ bool karte_t::load(const char *filename)
 	loadsave_t file;
 
 	// drop any line-route overlay from the previous game (display only, not saved)
-	line_route_overlay.clear();
+	clear_line_route_overlay( false );
 
 	// clear hash table with missing paks (may cause some small memory loss though)
 	pakset_manager_t::clear_missing_paks();

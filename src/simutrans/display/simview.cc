@@ -308,10 +308,10 @@ void main_view_t::display(bool force_dirty)
 			// Two coherent shades derived once per frame from the owning player's colour ramp: a bright
 			// core (ramp base + the GUI "bright" offset) that stays legible on dark terrain, and a
 			// neutral-dark outline that separates the stroke from light terrain. The stored colour is
-			// player_color1 + 1 (see tool_line_route_overlay_t), so ramp base = stored - 1. No new
-			// setting is introduced; this only reuses the existing player-colour ramp.
+			// the ramp base (owning player's colour); reuses the existing player-colour ramp, no new
+			// setting. The addition stays within the 8-shade ramp and never underflows.
 			const palette_index_t col_idx = welt->get_line_route_overlay_color();
-			const PIXVAL col_main = gfx->palette_lookup( (palette_index_t)(col_idx - 1 + env_t::gui_player_color_bright) );
+			const PIXVAL col_main = gfx->palette_lookup( (palette_index_t)(col_idx + env_t::gui_player_color_bright) );
 			const PIXVAL col_halo = gfx->palette_lookup( COL_BLACK );
 			const sint8 lane_sign = welt->get_settings().is_drive_left() ? 1 : -1;
 			// tile-centre anchor (screen pixels): half a tile across and ~19/32 down, so the stroke
@@ -320,9 +320,13 @@ void main_view_t::display(bool force_dirty)
 			// tile-centre anchor (screen pixels): half a tile across, ~19/32 down onto the way surface.
 			const scr_coord band( IMG_SIZE/2, (IMG_SIZE*19)/32 );
 
-			// Two route tiles are one leg only if they are 8-neighbours and distinct; anything else is a
-			// break in the route and ends the stroke (never bevel across a gap).
+			// Two route tiles are one leg only if both are valid, 8-neighbours and distinct; a
+			// koord3d::invalid entry is an explicit break between routable sub-legs (a failed leg), and
+			// anything non-adjacent ends the stroke too, so the bevel / U-cap never joins across a gap.
 			auto adjacent = []( const koord3d& p, const koord3d& q ) -> bool {
+				if(  p == koord3d::invalid  ||  q == koord3d::invalid  ) {
+					return false;
+				}
 				const koord dd = q.get_2d() - p.get_2d();
 				return dd.x >= -1  &&  dd.x <= 1  &&  dd.y >= -1  &&  dd.y <= 1  &&  ( dd.x != 0  ||  dd.y != 0 );
 			};

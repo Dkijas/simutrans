@@ -61,8 +61,24 @@ on:
         required: false
         type: boolean
         default: false
-      unmerged_rehearsal:
-        description: 'REHEARSAL ONLY: allow a commit that is not on master history. Requires the full 40-character SHA in ref. The result is marked NOT-FOR-DISTRIBUTION.'
+      # Two separate questions, deliberately not one input.
+      #
+      # "Is this revision one we are allowed to sign at all?" is a trust
+      # question, answered by allow_unmerged.
+      # "Is what comes out meant to be given to anyone?" is a question of
+      # intent, answered by rehearsal.
+      #
+      # Folding them together would mean a rehearsal could only be had by
+      # picking an off-master commit, which is the wrong reason to choose a
+      # revision, and would let "it is only a rehearsal" become a way to sign
+      # code that has not been accepted.
+      rehearsal:
+        description: 'This run is a rehearsal: mark the result NOT-FOR-DISTRIBUTION. On by default. It is signed with a real identity either way.'
+        required: false
+        type: boolean
+        default: true
+      allow_unmerged:
+        description: 'TRUST EXCEPTION: permit a commit that is not on master history. Requires the full 40-character SHA in ref.'
         required: false
         type: boolean
         default: false
@@ -93,6 +109,7 @@ jobs:
       subject: ${{ steps.resolve.outputs.subject }}
       trust: ${{ steps.resolve.outputs.trust }}
       distribution_ok: ${{ steps.resolve.outputs.distribution_ok }}
+      not_for_distribution: ${{ steps.resolve.outputs.not_for_distribution }}
       svn_rev: ${{ steps.resolve.outputs.svn_rev }}
       commits_on_top: ${{ steps.resolve.outputs.commits_on_top }}
       revision_id: ${{ steps.resolve.outputs.revision_id }}
@@ -111,7 +128,8 @@ jobs:
           # Never interpolated into the script body: the values arrive as
           # environment variables and are only ever used quoted.
           INPUT_REF: ${{ inputs.ref }}
-          UNMERGED_REHEARSAL: ${{ inputs.unmerged_rehearsal }}
+          ALLOW_UNMERGED: ${{ inputs.allow_unmerged }}
+          REHEARSAL: ${{ inputs.rehearsal }}
         run: |
           set -euo pipefail
 
@@ -132,12 +150,12 @@ jobs:
           if git merge-base --is-ancestor "$sha" refs/remotes/origin/master; then
             trust="on master history"
             distribution_ok=true
-          elif [ "$UNMERGED_REHEARSAL" = "true" ]; then
+          elif [ "$ALLOW_UNMERGED" = "true" ]; then
             # The documented, bounded exception.  It has to be asked for by
             # name and it has to name the commit exactly, because a branch or
             # tag can be moved between the approval and the run.
             if ! printf '%s' "$INPUT_REF" | grep -qE '^[0-9a-f]{40}$'; then
-              echo "::error::a rehearsal of an unmerged revision must name the exact commit."
+              echo "::error::signing an unmerged revision must name the exact commit."
               echo "::error::Pass the full 40-character SHA in 'ref'.  A branch or tag name is"
               echo "::error::refused here: either can be moved after this run was approved."
               exit 1
@@ -146,20 +164,33 @@ jobs:
               echo "::error::'ref' names $INPUT_REF but the checkout is at $sha."
               exit 1
             fi
-            trust="UNMERGED REHEARSAL, explicitly requested"
+            trust="NOT on master history, permitted by allow_unmerged"
             distribution_ok=false
             echo "::warning::This revision is NOT on master history."
-            echo "::warning::Anything produced is a rehearsal artifact and must not be distributed."
+            echo "::warning::Whatever is produced must not be distributed."
           else
             echo "::error::refusing to sign $sha."
             echo "::error::Requested ref: '${INPUT_REF:-<the ref this run started from>}'"
             echo "::error::A revision may only be signed when it is on master's history."
             echo "::error::Carrying a tag is NOT sufficient and is not accepted: tags move,"
             echo "::error::and the Nightly tag has already pointed at a work branch."
-            echo "::error::To rehearse an unmerged commit, set 'unmerged_rehearsal' and pass"
-            echo "::error::its full 40-character SHA in 'ref'.  The result is then marked as"
-            echo "::error::not for distribution."
+            echo "::error::To sign an unmerged commit anyway, set 'allow_unmerged' and pass"
+            echo "::error::its full 40-character SHA in 'ref'."
             exit 1
+          fi
+
+          # Intent, kept separate from trust.  A run is marked not for
+          # distribution when the operator says it is a rehearsal, OR when the
+          # revision is not on master history -- either is enough on its own.
+          if [ "$REHEARSAL" = "true" ] || [ "$distribution_ok" != "true" ]; then
+            not_for_distribution=true
+          else
+            not_for_distribution=false
+          fi
+          if [ "$not_for_distribution" = "true" ]; then
+            echo "::warning::This run is marked NOT FOR DISTRIBUTION."
+            echo "::warning::It is still signed with the real Developer ID identity: the name"
+            echo "::warning::of the file is a label, not a cryptographic restriction."
           fi
 
           # ---------------------------------------------------------------
@@ -197,6 +228,7 @@ jobs:
             echo "subject=$subject"
             echo "trust=$trust"
             echo "distribution_ok=$distribution_ok"
+            echo "not_for_distribution=$not_for_distribution"
             echo "svn_rev=$svn_rev"
             echo "commits_on_top=$commits_on_top"
             echo "revision_id=$revision_id"
@@ -213,7 +245,8 @@ jobs:
             echo "| requested ref | \`${INPUT_REF:-<dispatch ref>}\` |"
             echo "| Subversion base | r$svn_rev (\`${svn_base_commit:0:9}\`) |"
             echo "| version identity | \`$revision_id\` - $revision_note |"
-            echo "| fit for distribution | $distribution_ok |"
+            echo "| on master history | $distribution_ok |"
+            echo "| marked NOT FOR DISTRIBUTION | $not_for_distribution |"
           } >> "$GITHUB_STEP_SUMMARY"
 
       - name: Build the architecture matrix
@@ -399,7 +432,8 @@ jobs:
             "revision_id": "${{ needs.resolve.outputs.revision_id }}",
             "svn_base_revision": "${{ needs.resolve.outputs.svn_rev }}",
             "commits_on_top": "${{ needs.resolve.outputs.commits_on_top }}",
-            "distribution_ok": "${{ needs.resolve.outputs.distribution_ok }}"
+            "distribution_ok": "${{ needs.resolve.outputs.distribution_ok }}",
+            "not_for_distribution": "${{ needs.resolve.outputs.not_for_distribution }}"
           }
           PROVENANCE
           cat out/provenance.json
@@ -525,6 +559,7 @@ jobs:
           expect arch       "${{ matrix.arch }}"
           expect revision_id "${{ needs.resolve.outputs.revision_id }}"
           expect distribution_ok "${{ needs.resolve.outputs.distribution_ok }}"
+          expect not_for_distribution "${{ needs.resolve.outputs.not_for_distribution }}"
 
           echo "symlinks=$(get symlinks)" >> "$GITHUB_OUTPUT"
 
@@ -578,18 +613,19 @@ jobs:
       - name: Build the distribution archive
         id: archive
         env:
-          DISTRIBUTION_OK: ${{ needs.resolve.outputs.distribution_ok }}
+          NOT_FOR_DISTRIBUTION: ${{ needs.resolve.outputs.not_for_distribution }}
           REVISION_ID: ${{ needs.resolve.outputs.revision_id }}
         run: |
           set -euo pipefail
           mkdir -p dist
-          # A rehearsal of an unmerged commit is signed and notarized for real,
-          # so the file has to say what it is.  Naming it like a release
-          # archive is how a rehearsal ends up shipped by mistake.
-          if [ "$DISTRIBUTION_OK" = "true" ]; then
-            name="simumac-${{ matrix.arch }}-${REVISION_ID}-signed.zip"
-          else
+          # A rehearsal is signed and notarized for real, so the file has to
+          # say what it is.  Naming it like a release archive is how a
+          # rehearsal ends up shipped by mistake.  The name is a label, not a
+          # cryptographic restriction: the signature is the same either way.
+          if [ "$NOT_FOR_DISTRIBUTION" = "true" ]; then
             name="simumac-${{ matrix.arch }}-${REVISION_ID}-REHEARSAL-NOT-FOR-DISTRIBUTION.zip"
+          else
+            name="simumac-${{ matrix.arch }}-${REVISION_ID}-signed.zip"
           fi
           echo "name=$name" >> "$GITHUB_OUTPUT"
           # Same layout as the archives the nightly workflows already publish:
@@ -621,7 +657,8 @@ jobs:
             echo "| commit | \`${{ needs.resolve.outputs.sha }}\` |"
             echo "| version identity | \`${{ needs.resolve.outputs.revision_id }}\` |"
             echo "| Subversion base | r${{ needs.resolve.outputs.svn_rev }}, ${{ needs.resolve.outputs.commits_on_top }} commit(s) on top |"
-            echo "| fit for distribution | ${{ needs.resolve.outputs.distribution_ok }} |"
+            echo "| on master history | ${{ needs.resolve.outputs.distribution_ok }} |"
+            echo "| marked NOT FOR DISTRIBUTION | ${{ needs.resolve.outputs.not_for_distribution }} |"
             echo "| runner | ${{ matrix.runner }} |"
             echo "| identity | $SIGNING_IDENTITY |"
             echo "| result | ${{ job.status }} |"

@@ -152,7 +152,8 @@ than waiting. See [Rehearsing it](#rehearsing-it) for what can be done instead.
 | `ref` | Commit to sign. Empty means the ref the run was started from. |
 | `architecture` | `arm64`, `x86_64`, or `both`. |
 | `upload_artifact` | Whether the signed archive is kept as a workflow artifact. Off by default. |
-| `unmerged_rehearsal` | Rehearsal escape hatch. See below. Off by default. |
+| `rehearsal` | Mark the result NOT-FOR-DISTRIBUTION. **On by default.** |
+| `allow_unmerged` | Trust exception: permit a commit that is not on master history. Off by default. |
 
 The run then waits for an environment reviewer to approve it before the signing
 job starts.
@@ -182,17 +183,30 @@ independent, and neither is a reason to skip the other.
 
 ### Rehearsing it
 
-`unmerged_rehearsal` exists so that a rehearsal does not have to be disguised
-as something else. It is deliberately awkward:
+Two separate questions, and two separate inputs, on purpose.
 
-* it has to be asked for by name;
-* `ref` must be the **full 40-character SHA**, because a branch or a tag can be
-  moved between the approval and the run;
-* the resulting archive is named `…-REHEARSAL-NOT-FOR-DISTRIBUTION.zip`, and
-  the provenance record says `distribution_ok=false`.
+**`rehearsal` — is what comes out meant for anyone?** On by default. When set,
+the archive is named `…-REHEARSAL-NOT-FOR-DISTRIBUTION.zip` and the provenance
+record says `not_for_distribution=true`. This is independent of which revision
+was built: a rehearsal of `master` itself is the normal case, and should not
+require choosing an odd commit to get the label.
 
-It is signed and notarized for real. It is not a release, and it is named so
-that it cannot quietly become one.
+**`allow_unmerged` — may this revision be signed at all?** Off by default. It
+permits a commit that is not on `master`'s history, and it is deliberately
+awkward: it has to be asked for by name, and `ref` must be the **full
+40-character SHA**, because a branch or a tag can be moved between the approval
+and the run. A revision admitted this way is always marked not for
+distribution, whatever `rehearsal` is set to.
+
+Folding these into one input would mean a rehearsal could only be had by
+picking an off-master commit — the wrong reason to choose a revision — and
+would let "it is only a rehearsal" turn into permission to sign code the
+project has not accepted.
+
+**The label is not a restriction.** A rehearsal is signed with the same real
+Developer ID and notarized by Apple like anything else. `NOT-FOR-DISTRIBUTION`
+in the file name is a note to humans; it constrains nothing cryptographically,
+and the binary would pass Gatekeeper on any Mac it reached.
 
 ### About artifact visibility
 
@@ -329,10 +343,20 @@ inside it were built for the runner's macOS and carry their own minimums. So
 beside it so the two cannot be confused. Do not quote the executable's
 deployment target as the system requirement.
 
+Read that number for what it is. It is the highest minimum **declared by the
+Mach-O files in that one build**, not a test result: nothing here has been run
+on that version of macOS, and building on macOS 15.7.9 does not demonstrate
+that the result works on 15.0. It also changes when the dependencies change —
+a Homebrew update to any bundled library can move it — so it has to be read
+from the build being shipped, never carried over from a previous one.
+
 **A package labelled for one architecture must contain that architecture.**
 The inspection fails outright when a package named for `x86_64` contains no
-`x86_64` binary at all — the exact shape the published `simumac-intel` archive
-has today. The name of a file is not evidence about its contents.
+`x86_64` binary at all — which is the shape of the `simumac-intel-nightly.zip`
+that was downloaded and examined here. That statement is about the specific
+archives inspected, identified by their sha256 in the pull request; it is not a
+claim about every archive the project has ever published. The name of a file is
+not evidence about its contents, and neither is the name of a workflow.
 
 ---
 

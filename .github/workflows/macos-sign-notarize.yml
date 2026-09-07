@@ -420,9 +420,12 @@ jobs:
   sign:
     name: Sign and notarize ${{ matrix.arch }}
     needs: [resolve, build]
-    # The canonical repository only.  A fork that copies this workflow has no
-    # secrets anyway, but failing here is clearer than failing at `security`.
-    if: github.repository == 'simutrans/simutrans'
+    # LAB-ONLY CHANGE - see LAB-ONLY.md.  In production this reads
+    #   if: github.repository == 'simutrans/simutrans'
+    # which would skip this job in a fork and leave the missing-secret failure
+    # path unexercised.  Widened here only so that path can be demonstrated.
+    # THIS LINE MUST NOT REACH THE PRODUCTION PATCH.
+    if: github.repository == 'simutrans/simutrans' || github.repository == 'Dkijas/simutrans'
     runs-on: ${{ matrix.runner }}
     permissions:
       contents: read

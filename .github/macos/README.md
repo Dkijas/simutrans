@@ -1,10 +1,19 @@
 # Signing and notarizing the macOS build
 
-Apps distributed outside the Mac App Store have to be signed with a **Developer
-ID Application** certificate and **notarized** by Apple. Without that, macOS
-puts a downloaded copy in quarantine and refuses to open it, and the user is
-told the app "is damaged and can't be opened" — which is what the current
-unsigned nightly archives do on a modern macOS.
+Apps distributed outside the Mac App Store are expected to be signed with a
+**Developer ID Application** certificate and **notarized** by Apple.
+
+What actually happens without that, stated no more strongly than it is: an
+archive downloaded with a browser is marked as quarantined, and on first launch
+macOS blocks it, saying it cannot verify the developer or that the app is free
+of malware. The user is not stuck — Apple documents a per-app way through it,
+in *System Settings → Privacy & Security → Open Anyway* — but they have to know
+to do that, and they have to decide to trust software macOS has just told them
+it could not check. Nothing here requires anyone to turn Gatekeeper off
+globally, and Apple documents no such setting; do not describe it that way.
+
+Signing and notarizing removes that step, and lets macOS tell the user the
+opposite: that Apple checked the app for malicious software and found none.
 
 This directory holds the pieces that produce a signed, notarized and stapled
 `simutrans.app`. The workflow that drives them is
@@ -50,9 +59,13 @@ set it up enables or changes two-factor authentication.
 
 In App Store Connect, *Users and Access → Integrations → App Store Connect API*:
 
-* Use the **Team Keys** tab. Apple states that individual keys "aren't able to
-  use Provisioning endpoints, access Sales and Finance, or `notaryTool`", so an
-  individual key will not work here whatever role it is given.
+* Use the **Team Keys** tab. Apple's current documentation on creating App
+  Store Connect API keys lists two kinds, Team and Individual, and says of the
+  latter that individual keys "aren't able to use Provisioning endpoints,
+  access Sales and Finance, or `notaryTool`". An individual key will not work
+  here whatever role it is given. (Checked against Apple's page on 2026-09-07
+  rather than carried over from an older write-up; re-check it before assuming
+  it still holds.)
 * Give the key the **Developer** role. That is enough for notarization. Do not
   use Admin: an Admin key can create and delete users.
 * Generating a team key requires an Admin account in App Store Connect.
@@ -117,24 +130,69 @@ revoked.
 
 ---
 
+## Before it can be run at all
+
+GitHub only offers `workflow_dispatch` for a workflow that exists on the
+repository's **default branch**: *"This event will only trigger a workflow run
+if the workflow file exists on the default branch."* Once it has been there and
+has run once, it can be dispatched against other branches and tags through the
+API or the CLI — but not before.
+
+So this workflow cannot be exercised from a pull request branch. It has to
+reach `master` first. There is no way around that, and the ways people reach
+for — pushing a temporary tag, pushing to master to "just try it" — are worse
+than waiting. See [Rehearsing it](#rehearsing-it) for what can be done instead.
+
 ## Running it
 
 *Actions → macOS signed build (Developer ID) → Run workflow.*
 
 | Input | Meaning |
 | --- | --- |
-| `ref` | Commit SHA or tag to sign. Empty means the branch the run was started from. |
+| `ref` | Commit to sign. Empty means the ref the run was started from. |
 | `architecture` | `arm64`, `x86_64`, or `both`. |
 | `upload_artifact` | Whether the signed archive is kept as a workflow artifact. Off by default. |
+| `unmerged_rehearsal` | Rehearsal escape hatch. See below. Off by default. |
 
 The run then waits for an environment reviewer to approve it before the signing
 job starts.
 
-The revision is resolved to a full commit SHA and is only accepted if it is an
-ancestor of `master` or carries a tag in this repository. An arbitrary branch,
-or a pull request from a fork, is refused. This is deliberate: it is the
-mechanism that stops the signing identity from ever being applied to code the
-project has not accepted.
+### Which revisions are accepted
+
+The ref is resolved to a full commit SHA, and that SHA has to be **on
+`master`'s history**. That is the whole rule.
+
+**A tag is not accepted as evidence of anything**, and this is not caution for
+its own sake:
+
+* `Nightly` is moved to whatever commit was pushed last. It has already pointed
+  at a work branch.
+* `124.0` and `124.1` are not on `master`'s history at all.
+* Tags differ between clones unless they are force-fetched, so "it has a tag"
+  is not even a stable statement.
+
+A tag is therefore only ever a convenient way to *name* a commit here; the
+commit still has to pass the same test as any other.
+
+The environment should carry the same restriction from the other side. Set a
+**deployment branch policy** on `macos-signing` so the identity can only be
+reached from the refs you intend — `master`, plus a named rehearsal branch if
+you are using one. The workflow's own check and the environment's check are
+independent, and neither is a reason to skip the other.
+
+### Rehearsing it
+
+`unmerged_rehearsal` exists so that a rehearsal does not have to be disguised
+as something else. It is deliberately awkward:
+
+* it has to be asked for by name;
+* `ref` must be the **full 40-character SHA**, because a branch or a tag can be
+  moved between the approval and the run;
+* the resulting archive is named `…-REHEARSAL-NOT-FOR-DISTRIBUTION.zip`, and
+  the provenance record says `distribution_ok=false`.
+
+It is signed and notarized for real. It is not a release, and it is named so
+that it cannot quietly become one.
 
 ### About artifact visibility
 
@@ -183,16 +241,40 @@ taken from the ref the run was dispatched from — the same commit the workflow
 file itself was read from, so it adds no trust surface. A revision on `master`
 is a thing to sign, not a thing that gets to define how signing works.
 
-That separation is also what makes it possible to rehearse the whole flow
-against a real `master` revision *before* these files are on `master`: dispatch
-the workflow from the branch that carries it, and point `ref` at the commit to
-build.
+The payload that moves between the two jobs is checked before the identity is
+loaded. `check-payload.sh` runs first and rejects an archive that extracted to
+symlinks pointing outside the tree, absolute symlinks, setuid or setgid files,
+more than one bundle, a bundle in the wrong place, or anything sitting beside
+it. "It is only data" is not a safety argument on its own: the signing steps
+walk that tree, so the tree is checked before there is anything worth stealing
+on the machine.
+
+### Version identity
+
+The resolve job records three separate things, and keeps them separate:
+
+* the **commit SHA**, which identifies the tree exactly;
+* the **Subversion base revision**, taken from the nearest ancestor that came
+  from the mirror;
+* how many commits sit **on top of** that base.
+
+The base revision says which trunk revision the tree was taken from. It does
+**not** say the tree is that revision — searching back for a `git-svn-id` finds
+an ancestor, not an identity. So a build that is exactly r12263 is labelled
+`r12263`, and one with two commits on top is labelled `r12263+2.g<sha>` rather
+than being rounded to either number.
+
+If no reachable commit carries a `git-svn-id` at all — a history that never
+touched the mirror, or a shallow clone that does not reach one — the run fails.
+It does not invent a number, and it does not fall back to a commit count plus
+an offset. A package whose version cannot be stated truthfully is not signed.
 
 ### The scripts
 
 | Script | Runs in | Does |
 | --- | --- | --- |
-| `inspect-bundle.sh` | build | Lists every Mach-O file, checks they are all the expected architecture, and fails if any dependency or rpath still points at a Homebrew prefix or the runner's home directory |
+| `inspect-bundle.sh` | build | Lists every Mach-O file, checks they are all the expected architecture, measures the effective minimum macOS across the whole bundle, and fails if any dependency or rpath still points at a Homebrew prefix or the runner's home directory |
+| `check-payload.sh` | sign | Runs before the keychain exists: rejects escaping or absolute symlinks, setuid/setgid files, a second bundle, a misplaced bundle, or strays beside it |
 | `keychain.sh` | sign | Creates and destroys the temporary keychain; validates the certificate's type, issuer, expiry and identity before importing it |
 | `sign.sh` | sign | Signs nested code first and the bundle last, then verifies the result before anything is sent to Apple |
 | `notarize.sh` | sign | Submits to the notary service, distinguishes a rejection from a transport failure, staples the ticket |
@@ -230,16 +312,75 @@ already ships. Merging them with `lipo` would mean reconciling two different
 sets of Homebrew libraries, and a universal binary that has not been verified
 slice by slice should not be called universal.
 
-**Runner labels are pinned.** `macos-15` and `macos-15-intel` rather than
-`macos-latest`. The project sets no `CMAKE_OSX_DEPLOYMENT_TARGET`, so the
-minimum macOS version of the product is whatever the runner's SDK defaults to;
-following `macos-latest` moves that floor without anyone deciding to. Both are
-*standard* runners, which are free and unlimited on public repositories — no
-larger runner label appears anywhere in this workflow, so it cannot incur a
-charge. GitHub still updates the contents of a pinned image, so the exact
-toolchain is recorded in every run's log rather than assumed.
+**Runner labels are pinned, and the deployment target is chosen.** `macos-15`
+and `macos-15-intel` rather than `macos-latest`, and
+`CMAKE_OSX_DEPLOYMENT_TARGET=13.0` rather than whatever the SDK defaults to.
+Leaving it unset is how the two published nightlies ended up with minimums of
+14.0 and 26.0 without anyone deciding either. Both labels are *standard*
+runners, free and unlimited on public repositories — no larger-runner label
+appears anywhere here, so this cannot incur a charge. GitHub still updates the
+contents of a pinned image, so the exact toolchain is recorded in every run.
+
+**The minimum macOS is measured, not declared.** Setting a deployment target on
+our own code does not lower the floor for the bundle: the Homebrew libraries
+inside it were built for the runner's macOS and carry their own minimums. So
+`inspect-bundle.sh` reads the minimum of *every* Mach-O file and reports the
+**maximum** as the effective minimum, printing the main executable's own value
+beside it so the two cannot be confused. Do not quote the executable's
+deployment target as the system requirement.
+
+**A package labelled for one architecture must contain that architecture.**
+The inspection fails outright when a package named for `x86_64` contains no
+`x86_64` binary at all — the exact shape the published `simumac-intel` archive
+has today. The name of a file is not evidence about its contents.
 
 ---
+
+## Reproducibility, and what cannot be pinned
+
+The build downloads two kinds of input that are outside this repository:
+
+**Homebrew packages.** Whatever versions the runner's Homebrew resolves at the
+time. The exact versions installed are recorded in the build manifest.
+
+**The language pack.** `tools/get_lang_files.sh` POSTs to the translator to
+*regenerate* an export and then downloads it, so the content is whatever the
+server produces at that moment. There is no version, tag or revision to pin.
+This is not theoretical: between the two nightlies of 2026-09-07, `dk.tab` went
+from 2613 to 599 entries and `gr.tab` from 2679 to 679, while `de.tab` and
+`en.tab` changed by two lines. Both shrunken files are well-formed and end
+cleanly, so this is a content change upstream, not a truncated download — but
+it means **the same commit does not produce the same package twice**.
+
+What is done about it:
+
+* the manifest records the sha256 of every `.tab` that went into the build,
+  along with the Homebrew versions and the toolchain;
+* the archive the build uploads *is* the preserved copy, and the signing job
+  consumes exactly that — it never re-downloads anything and never rebuilds.
+
+A hash records which bytes were used. It does not let anyone fetch those bytes
+again. If a specific build has to be reproducible later, the archive is the
+only thing that makes it so, and it has to be kept.
+
+## What has been validated, and what has not
+
+Being a draft and being unvalidated are different things; so are these five
+levels, and they should not be quoted as one another:
+
+| | Status |
+| --- | --- |
+| Static validation (`actionlint`, `shellcheck`) | done, clean |
+| Control-flow tests against mocked macOS tools | done, 52 cases |
+| The scripts executed for real on macOS | **not done** |
+| The whole workflow executed in GitHub Actions | **not done** — it cannot be, until it is on the default branch |
+| A real signature and a real notarization | **not done** |
+
+The mocked tests prove failure behaviour and control flow: that a rejection is
+never retried, that a missing secret stops the run, that cleanup happens on the
+failure paths. They prove nothing about whether `codesign` or the notary
+service will accept this bundle. Holding a certificate, or having a Mac
+available, is not validation either.
 
 ## Diagnosing failures
 
@@ -310,14 +451,28 @@ assets, and publishes an Android build to the Play Store beta track.
 
 This workflow is not part of that — it only ever runs from
 `workflow_dispatch` — but the branch you push it on will still set the rest
-off. Expect it, or cancel the runs.
+off. Expect it, or cancel the runs. A manual workflow existing alongside
+automatic publishers does not make a push safe.
 
-A commit that does not come from the SVN mirror also gets no revision number:
-`tools/get_revision.sh` and `cmake/SimutransRevision.cmake` both read only
-`git log -1`, so a nightly built from such a commit is labelled `r1` in the
-binary and with the commit count in the release title. That is a pre-existing
-issue, unrelated to signing, and it is another reason these files should reach
-`master` through SVN rather than through a merge here.
+A commit that did not come from the SVN mirror also loses its revision number.
+Both `tools/get_revision.sh` and `cmake/SimutransRevision.cmake` read only
+`git log -1`, so neither finds a `git-svn-id` on such a commit and both fall
+back. Measured on 2026-09-07, from one push of a work branch:
+
+* the binary's banner read `Simutrans 124.5.1 Nightly - r1`, because the cmake
+  fallback counts commits in what `actions/checkout` clones — one, since it
+  clones shallow — and because its `+328` correction is added to `res_var`,
+  the exit status of the preceding command, instead of to the revision;
+* the release title read `Nightly build r12261`, because the release workflow
+  clones with full depth and got the commit count plus 328 instead;
+* the real content was r12263 plus one commit;
+* and Google Play rejected the upload with `Version code 12261 has already
+  been used`, because that number belongs to an earlier, genuine revision.
+
+All of it predates this work and none of it is fixed here. It matters for two
+reasons: it is why these files should reach `master` through SVN rather than a
+merge, and it is why this workflow refuses to sign a revision whose Subversion
+base it cannot establish.
 
 ## Relationship with SVN
 

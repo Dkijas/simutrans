@@ -14,11 +14,14 @@
 #     machine (Homebrew prefixes, the runner home directory), which would work
 #     on the runner and fail on a user's Mac.
 #
-# Usage: inspect-bundle.sh <path-to-.app> <expected-arch> [inventory-out]
+# Usage: inspect-bundle.sh <path-to-.app> <expected-arch> [inventory-out] [summary-out]
 #
 #   expected-arch    arm64 or x86_64
 #   inventory-out    optional file to write the Mach-O list to, one path per
-#                    line, deepest first.  sign.sh consumes this ordering.
+#                    line, deepest first.  A record of what was there; sign.sh
+#                    deliberately recomputes its own list rather than trusting
+#                    this one.
+#   summary-out      optional key=value file for the build manifest
 
 set -euo pipefail
 
@@ -26,9 +29,11 @@ set -euo pipefail
 # always the real tool.
 PLISTBUDDY=${PLISTBUDDY:-/usr/libexec/PlistBuddy}
 
-APP=${1:?usage: inspect-bundle.sh <path-to-.app> <expected-arch> [inventory-out]}
+APP=${1:?usage: inspect-bundle.sh <path-to-.app> <expected-arch> [inventory-out] [summary-out]}
 EXPECTED_ARCH=${2:?expected architecture (arm64 or x86_64) is required}
 INVENTORY=${3:-}
+# key=value facts about the bundle, for the build manifest.
+SUMMARY_OUT=${4:-}
 
 if [ ! -d "$APP" ]; then
 	echo "::error::bundle not found: $APP"
@@ -106,31 +111,88 @@ echo
 # is reported rather than silently accepted.
 # ---------------------------------------------------------------------------
 echo "== architectures ==========================================="
+matching=0
+other_arch_only=0
 while IFS= read -r f; do
 	archs=$(lipo -archs "$f" 2>/dev/null || echo "unknown")
 	printf '%-12s %s\n' "$archs" "${f#"$APP"/}"
-	if [ "$archs" != "$EXPECTED_ARCH" ]; then
+	if [ "$archs" = "$EXPECTED_ARCH" ]; then
+		matching=$((matching + 1))
+	else
 		note_failure "architecture mismatch: ${f#"$APP"/} is '$archs', expected exactly '$EXPECTED_ARCH'"
+		case " $archs " in
+			*" $EXPECTED_ARCH "*) ;;
+			*) other_arch_only=$((other_arch_only + 1)) ;;
+		esac
 	fi
 done < "$macho_list.sorted"
+
+# Spelled out separately because this is the exact shape the published
+# "simumac-intel" archive has: an asset named for one architecture whose every
+# binary is the other one.  The name of a package is not evidence about it.
+if [ "$matching" -eq 0 ] && [ "$other_arch_only" -gt 0 ]; then
+	note_failure "this package is labelled '$EXPECTED_ARCH' but not one of its $macho_count Mach-O files is $EXPECTED_ARCH; it would not run on the machines it is named for"
+fi
 echo
 
 # ---------------------------------------------------------------------------
-# 3. Deployment target actually produced by this toolchain.
+# 3. Minimum macOS version, measured across the whole bundle.
 #
-# The project sets no CMAKE_OSX_DEPLOYMENT_TARGET, so this value is whatever
-# the runner's SDK defaulted to.  It is recorded, not asserted: claiming a
-# minimum macOS version we have not measured would be a fabrication.
+# The main executable's own deployment target is not the answer.  The bundle
+# ships Homebrew libraries built for the runner's macOS, and the application
+# cannot start on a system older than the highest minimum among everything it
+# loads.  The effective floor is therefore the maximum over all of them, and
+# that is what gets reported; the executable's own value is printed beside it
+# so the two cannot be confused.
 # ---------------------------------------------------------------------------
-echo "== deployment target (measured, not configured) ============"
+echo "== minimum macOS (measured across every Mach-O) ============"
+
+minos_of() {
+	otool -l "$1" | awk '
+		/LC_BUILD_VERSION/      { inblock = 1 }
+		inblock && /minos/      { print $2; exit }
+		/LC_VERSION_MIN_MACOSX/ { vmin = 1 }
+		vmin && /version/       { print $2; exit }'
+}
+
+# Orders 15.0 < 15.4 < 26.0, which a string compare does not.
+version_gt() {
+	[ "$1" = "$2" ] && return 1
+	[ "$(printf '%s\n%s\n' "$1" "$2" | sort -t. -k1,1n -k2,2n -k3,3n | tail -1)" = "$1" ]
+}
+
+effective_min=""
+effective_min_file=""
+while IFS= read -r f; do
+	m=$(minos_of "$f")
+	[ -n "$m" ] || continue
+	printf '   %-10s %s\n' "$m" "${f#"$APP"/}"
+	if [ -z "$effective_min" ] || version_gt "$m" "$effective_min"; then
+		effective_min=$m
+		effective_min_file=$f
+	fi
+done < "$macho_list.sorted"
+
 main_binary="$APP/Contents/MacOS/$("$PLISTBUDDY" -c 'Print :CFBundleExecutable' "$APP/Contents/Info.plist")"
 if [ -f "$main_binary" ]; then
-	otool -l "$main_binary" | awk '
-		/LC_BUILD_VERSION/   { inblock = 1 }
-		inblock && /platform/ { platform = $2 }
-		inblock && /minos/    { minos = $2 }
-		inblock && /sdk/      { sdk = $2; inblock = 0 }
-		END { printf "platform=%s minos=%s sdk=%s\n", platform, minos, sdk }'
+	main_min=$(minos_of "$main_binary")
+	echo
+	echo "   main executable deployment target : ${main_min:-unknown}"
+	echo "   EFFECTIVE minimum macOS           : ${effective_min:-unknown} (set by ${effective_min_file#"$APP"/})"
+	if [ -n "$main_min" ] && [ -n "$effective_min" ] && version_gt "$effective_min" "$main_min"; then
+		echo "::warning::a bundled library requires macOS $effective_min while the executable targets $main_min."
+		echo "::warning::The package runs on macOS $effective_min and later.  Do not advertise $main_min."
+	fi
+	if [ -n "$SUMMARY_OUT" ]; then
+		{
+			echo "expected_arch=$EXPECTED_ARCH"
+			echo "macho_count=$macho_count"
+			echo "symlinks=$symlink_count"
+			echo "main_deployment_target=${main_min:-unknown}"
+			echo "effective_min_macos=${effective_min:-unknown}"
+			echo "effective_min_set_by=${effective_min_file#"$APP"/}"
+		} > "$SUMMARY_OUT"
+	fi
 else
 	note_failure "main executable not found where Info.plist says it is: $main_binary"
 fi

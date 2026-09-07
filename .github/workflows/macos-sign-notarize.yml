@@ -31,7 +31,7 @@ on:
   workflow_dispatch:
     inputs:
       ref:
-        description: 'Commit SHA or tag to sign. Must be on master or tagged. Empty = the branch this workflow was started from.'
+        description: 'Commit to sign. Must be on master history. Empty = the ref this run was started from. A tag grants nothing on its own.'
         required: false
         type: string
         default: ''
@@ -46,6 +46,11 @@ on:
           - x86_64
       upload_artifact:
         description: 'Upload the signed archive as a workflow artifact. WARNING: this repository is public, so anyone able to read it can download that artifact. Leave off for a rehearsal.'
+        required: false
+        type: boolean
+        default: false
+      unmerged_rehearsal:
+        description: 'REHEARSAL ONLY: allow a commit that is not on master history. Requires the full 40-character SHA in ref. The result is marked NOT-FOR-DISTRIBUTION.'
         required: false
         type: boolean
         default: false
@@ -75,6 +80,10 @@ jobs:
       sha: ${{ steps.resolve.outputs.sha }}
       subject: ${{ steps.resolve.outputs.subject }}
       trust: ${{ steps.resolve.outputs.trust }}
+      distribution_ok: ${{ steps.resolve.outputs.distribution_ok }}
+      svn_rev: ${{ steps.resolve.outputs.svn_rev }}
+      commits_on_top: ${{ steps.resolve.outputs.commits_on_top }}
+      revision_id: ${{ steps.resolve.outputs.revision_id }}
       matrix: ${{ steps.matrix.outputs.matrix }}
     steps:
       - name: Checkout
@@ -87,34 +96,99 @@ jobs:
       - name: Resolve the revision and check it is one we may sign
         id: resolve
         env:
-          # Never interpolated into the script body: the value arrives as an
-          # environment variable and is only ever used quoted.
+          # Never interpolated into the script body: the values arrive as
+          # environment variables and are only ever used quoted.
           INPUT_REF: ${{ inputs.ref }}
+          UNMERGED_REHEARSAL: ${{ inputs.unmerged_rehearsal }}
         run: |
           set -euo pipefail
 
           sha=$(git rev-parse HEAD)
           subject=$(git log -1 --format=%s "$sha")
-
           git fetch --no-tags --quiet origin +refs/heads/master:refs/remotes/origin/master
-          git fetch --tags --quiet origin
 
+          # ---------------------------------------------------------------
+          # A tag is not a trust signal, and is not treated as one here.
+          #
+          # The `Nightly` tag is moved to whatever commit was pushed last, and
+          # has already pointed at a work branch.  Two release tags, 124.0 and
+          # 124.1, are not on master's history at all.  Tags also differ
+          # between clones unless they are force-fetched.  So a ref is only
+          # ever a convenient way to name a commit: the commit itself has to
+          # be part of the mirrored trunk history.
+          # ---------------------------------------------------------------
           if git merge-base --is-ancestor "$sha" refs/remotes/origin/master; then
-            trust="ancestor of master"
-          elif [ -n "$(git tag --points-at "$sha")" ]; then
-            trust="tagged: $(git tag --points-at "$sha" | tr '\n' ' ')"
+            trust="on master history"
+            distribution_ok=true
+          elif [ "$UNMERGED_REHEARSAL" = "true" ]; then
+            # The documented, bounded exception.  It has to be asked for by
+            # name and it has to name the commit exactly, because a branch or
+            # tag can be moved between the approval and the run.
+            if ! printf '%s' "$INPUT_REF" | grep -qE '^[0-9a-f]{40}$'; then
+              echo "::error::a rehearsal of an unmerged revision must name the exact commit."
+              echo "::error::Pass the full 40-character SHA in 'ref'.  A branch or tag name is"
+              echo "::error::refused here: either can be moved after this run was approved."
+              exit 1
+            fi
+            if [ "$INPUT_REF" != "$sha" ]; then
+              echo "::error::'ref' names $INPUT_REF but the checkout is at $sha."
+              exit 1
+            fi
+            trust="UNMERGED REHEARSAL, explicitly requested"
+            distribution_ok=false
+            echo "::warning::This revision is NOT on master history."
+            echo "::warning::Anything produced is a rehearsal artifact and must not be distributed."
           else
             echo "::error::refusing to sign $sha."
-            echo "::error::Requested ref: '${INPUT_REF:-<the branch this run started from>}'"
-            echo "::error::A revision may only be signed when it is an ancestor of master"
-            echo "::error::or carries a tag in this repository.  This one is neither, so it"
-            echo "::error::is not a revision the project has accepted."
+            echo "::error::Requested ref: '${INPUT_REF:-<the ref this run started from>}'"
+            echo "::error::A revision may only be signed when it is on master's history."
+            echo "::error::Carrying a tag is NOT sufficient and is not accepted: tags move,"
+            echo "::error::and the Nightly tag has already pointed at a work branch."
+            echo "::error::To rehearse an unmerged commit, set 'unmerged_rehearsal' and pass"
+            echo "::error::its full 40-character SHA in 'ref'.  The result is then marked as"
+            echo "::error::not for distribution."
             exit 1
           fi
 
-          echo "sha=$sha"         >> "$GITHUB_OUTPUT"
-          echo "subject=$subject" >> "$GITHUB_OUTPUT"
-          echo "trust=$trust"     >> "$GITHUB_OUTPUT"
+          # ---------------------------------------------------------------
+          # Version identity.
+          #
+          # The SVN revision of the nearest ancestor that came from the mirror
+          # identifies the BASE the tree was taken from.  It does not say the
+          # tree is identical to that revision, so the number of commits on
+          # top is carried alongside it and never folded away.  No offset is
+          # invented, and no revision number is manufactured when the history
+          # does not contain one.
+          # ---------------------------------------------------------------
+          svn_base_commit=$(git rev-list -1 --grep='^git-svn-id: ' "$sha" || true)
+          if [ -z "$svn_base_commit" ]; then
+            echo "::error::no commit reachable from $sha carries a git-svn-id, so the"
+            echo "::error::Subversion revision this tree is based on cannot be established."
+            echo "::error::A build from here would be labelled with a fabricated number."
+            echo "::error::Refusing to sign a package whose version cannot be stated truthfully."
+            exit 1
+          fi
+          svn_rev=$(git log -1 --format=%B "$svn_base_commit" \
+            | sed -n 's/^git-svn-id: .*trunk@\([0-9][0-9]*\) .*$/\1/p' | head -1)
+          commits_on_top=$(git rev-list --count "$svn_base_commit".."$sha")
+
+          if [ "$commits_on_top" -eq 0 ]; then
+            revision_id="r$svn_rev"
+            revision_note="exactly Subversion r$svn_rev"
+          else
+            revision_id="r$svn_rev+$commits_on_top.g$(git rev-parse --short=9 "$sha")"
+            revision_note="$commits_on_top commit(s) on top of Subversion r$svn_rev - the tree is NOT r$svn_rev"
+          fi
+
+          {
+            echo "sha=$sha"
+            echo "subject=$subject"
+            echo "trust=$trust"
+            echo "distribution_ok=$distribution_ok"
+            echo "svn_rev=$svn_rev"
+            echo "commits_on_top=$commits_on_top"
+            echo "revision_id=$revision_id"
+          } >> "$GITHUB_OUTPUT"
 
           {
             echo "### Revision to sign"
@@ -125,6 +199,9 @@ jobs:
             echo "| subject | $subject |"
             echo "| accepted because | $trust |"
             echo "| requested ref | \`${INPUT_REF:-<dispatch ref>}\` |"
+            echo "| Subversion base | r$svn_rev (\`${svn_base_commit:0:9}\`) |"
+            echo "| version identity | \`$revision_id\` - $revision_note |"
+            echo "| fit for distribution | $distribution_ok |"
           } >> "$GITHUB_STEP_SUMMARY"
 
       - name: Build the architecture matrix
@@ -173,8 +250,6 @@ jobs:
       # WHAT DOES THE BUILDING is this workflow and the scripts beside it,
       # which come from the ref the run was dispatched from -- the same commit
       # the workflow file itself was read from, so this adds no trust surface.
-      # Keeping them apart is also what makes it possible to rehearse the flow
-      # on a master revision before these files are on master.
       - name: Checkout the revision to build
         # actions/checkout v6.0.0
         uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
@@ -210,9 +285,21 @@ jobs:
 
       - name: Build
         working-directory: source
+        env:
+          # Chosen on purpose rather than inherited.  Left unset, the target is
+          # whatever the runner's SDK defaults to, which is how the two
+          # published nightlies ended up with minimums of 14.0 and 26.0 without
+          # anyone deciding either.  This value only sets the floor for code
+          # compiled here; the Homebrew libraries in the bundle carry their own,
+          # so the number that actually matters is the effective minimum the
+          # inspection step measures across the whole bundle.
+          MACOSX_DEPLOYMENT_TARGET: '13.0'
         run: |
           set -euo pipefail
-          cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DSIMUTRANS_UPDATE_LANGFILES=ON
+          cmake -S . -B build \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DSIMUTRANS_UPDATE_LANGFILES=ON \
+            -DCMAKE_OSX_DEPLOYMENT_TARGET="$MACOSX_DEPLOYMENT_TARGET"
           cmake --build build --target install
 
       - name: Inspect the bundle
@@ -222,7 +309,47 @@ jobs:
           ci/.github/macos/inspect-bundle.sh \
             source/build/simutrans/simutrans.app \
             "${{ matrix.arch }}" \
-            macho-inventory.txt
+            macho-inventory.txt \
+            bundle-facts.txt
+
+      - name: Record the inputs that went into this build
+        run: |
+          set -euo pipefail
+          # What is and is not reproducible about this build.
+          #
+          # The language pack is the honest problem.  tools/get_lang_files.sh
+          # POSTs to the translator to regenerate an export and then downloads
+          # it, so the content is whatever the server produces at that moment;
+          # there is no version or revision to pin.  Two builds of the same
+          # commit hours apart genuinely differ: between the two nightlies of
+          # 2026-09-07, da.tab went from 2613 to 599 entries and gr.tab from
+          # 2679 to 679, both still well-formed, so this is upstream content
+          # change and not a truncated download.
+          #
+          # A hash records which bytes were used.  It does NOT let anyone
+          # fetch those bytes again.  The only copy that can be relied on is
+          # the archive this job uploads, which is exactly what the signing
+          # job consumes -- it never downloads anything or rebuilds.
+          {
+            echo "# Build inputs for ${{ needs.resolve.outputs.sha }} (${{ matrix.arch }})"
+            echo "revision_id=${{ needs.resolve.outputs.revision_id }}"
+            echo "svn_base_revision=${{ needs.resolve.outputs.svn_rev }}"
+            echo "commits_on_top_of_svn_base=${{ needs.resolve.outputs.commits_on_top }}"
+            echo "deployment_target_requested=13.0"
+            echo
+            echo "# Homebrew packages actually installed (mutable upstream, not pinnable here)"
+            brew list --versions pkg-config libpng freetype zstd sdl2 fluidsynth || true
+            echo
+            echo "# Language pack: regenerated server-side on every build, cannot be pinned"
+            echo "language_pack_source=https://makie.de/translator (tools/get_lang_files.sh)"
+            echo "# sha256 of each .tab as used by THIS build:"
+            find source/build/simutrans/simutrans.app/Contents/Resources/simutrans/text \
+              -maxdepth 1 -name '*.tab' -exec shasum -a 256 {} \; \
+              | awk '{ n = split($2, p, "/"); printf "%s  %s\n", p[n], $1 }' | sort || true
+            echo
+            echo "# Bundle facts measured after the build"
+            cat bundle-facts.txt
+          } | tee build-inputs.txt
 
       - name: Package the unsigned bundle
         id: package
@@ -256,11 +383,15 @@ jobs:
             "sha": "${{ needs.resolve.outputs.sha }}",
             "arch": "${{ matrix.arch }}",
             "runner": "${{ matrix.runner }}",
-            "symlinks": "$SYMLINKS"
+            "symlinks": "$SYMLINKS",
+            "revision_id": "${{ needs.resolve.outputs.revision_id }}",
+            "svn_base_revision": "${{ needs.resolve.outputs.svn_rev }}",
+            "commits_on_top": "${{ needs.resolve.outputs.commits_on_top }}",
+            "distribution_ok": "${{ needs.resolve.outputs.distribution_ok }}"
           }
           PROVENANCE
           cat out/provenance.json
-          cp toolchain.txt macho-inventory.txt out/
+          cp toolchain.txt macho-inventory.txt bundle-facts.txt build-inputs.txt out/
 
       - name: Upload the unsigned build
         # actions/upload-artifact v7.0.1
@@ -377,6 +508,8 @@ jobs:
           expect run_attempt "${{ github.run_attempt }}"
           expect sha        "${{ needs.resolve.outputs.sha }}"
           expect arch       "${{ matrix.arch }}"
+          expect revision_id "${{ needs.resolve.outputs.revision_id }}"
+          expect distribution_ok "${{ needs.resolve.outputs.distribution_ok }}"
 
           echo "symlinks=$(get symlinks)" >> "$GITHUB_OUTPUT"
 
@@ -386,6 +519,17 @@ jobs:
           mkdir -p work
           /usr/bin/ditto -x -k "incoming/simutrans-${{ matrix.arch }}-unsigned.zip" work
           ls -l work work/simutrans
+
+      # Runs before the keychain exists, so a payload that fails this is
+      # rejected while the Developer ID is still nowhere near the machine.
+      # "It is only data" is not a safety argument on its own: an archive can
+      # carry symlinks out of the tree, paths that escape it, and setuid bits,
+      # and the signing steps walk that tree.
+      - name: Check the payload before loading the signing identity
+        run: |
+          set -euo pipefail
+          chmod +x .github/macos/*.sh
+          .github/macos/check-payload.sh work simutrans/simutrans.app
 
       - name: Create the temporary keychain
         env:
@@ -417,19 +561,32 @@ jobs:
           .github/macos/notarize.sh "${RUNNER_TEMP}/notarize.zip" work/simutrans/simutrans.app
 
       - name: Build the distribution archive
+        id: archive
+        env:
+          DISTRIBUTION_OK: ${{ needs.resolve.outputs.distribution_ok }}
+          REVISION_ID: ${{ needs.resolve.outputs.revision_id }}
         run: |
           set -euo pipefail
           mkdir -p dist
+          # A rehearsal of an unmerged commit is signed and notarized for real,
+          # so the file has to say what it is.  Naming it like a release
+          # archive is how a rehearsal ends up shipped by mistake.
+          if [ "$DISTRIBUTION_OK" = "true" ]; then
+            name="simumac-${{ matrix.arch }}-${REVISION_ID}-signed.zip"
+          else
+            name="simumac-${{ matrix.arch }}-${REVISION_ID}-REHEARSAL-NOT-FOR-DISTRIBUTION.zip"
+          fi
+          echo "name=$name" >> "$GITHUB_OUTPUT"
           # Same layout as the archives the nightly workflows already publish:
           # simutrans/simutrans.app
-          /usr/bin/ditto -c -k --keepParent work/simutrans "dist/simumac-${{ matrix.arch }}-signed.zip"
+          /usr/bin/ditto -c -k --keepParent work/simutrans "dist/$name"
           ls -l dist
 
       - name: Verify the archive that would be shipped
         run: |
           set -euo pipefail
           .github/macos/verify.sh \
-            "dist/simumac-${{ matrix.arch }}-signed.zip" \
+            "dist/${{ steps.archive.outputs.name }}" \
             "${{ matrix.arch }}" \
             "${{ steps.provenance.outputs.symlinks }}"
 
@@ -447,11 +604,16 @@ jobs:
             echo "| | |"
             echo "|---|---|"
             echo "| commit | \`${{ needs.resolve.outputs.sha }}\` |"
+            echo "| version identity | \`${{ needs.resolve.outputs.revision_id }}\` |"
+            echo "| Subversion base | r${{ needs.resolve.outputs.svn_rev }}, ${{ needs.resolve.outputs.commits_on_top }} commit(s) on top |"
+            echo "| fit for distribution | ${{ needs.resolve.outputs.distribution_ok }} |"
             echo "| runner | ${{ matrix.runner }} |"
             echo "| identity | $SIGNING_IDENTITY |"
             echo "| result | ${{ job.status }} |"
-            if [ -f "dist/simumac-${{ matrix.arch }}-signed.zip" ]; then
-              echo "| sha256 | \`$(shasum -a 256 "dist/simumac-${{ matrix.arch }}-signed.zip" | awk '{print $1}')\` |"
+            archive="dist/${{ steps.archive.outputs.name }}"
+            if [ -n "${{ steps.archive.outputs.name }}" ] && [ -f "$archive" ]; then
+              echo "| archive | \`${{ steps.archive.outputs.name }}\` |"
+              echo "| sha256 | \`$(shasum -a 256 "$archive" | awk '{print $1}')\` |"
             fi
             echo "| published | no - this workflow never attaches anything to a release |"
           } >> "$GITHUB_STEP_SUMMARY"
@@ -464,8 +626,8 @@ jobs:
         # actions/upload-artifact v7.0.1
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
-          name: simumac-${{ matrix.arch }}-signed
-          path: dist/simumac-${{ matrix.arch }}-signed.zip
+          name: ${{ steps.archive.outputs.name }}
+          path: dist/${{ steps.archive.outputs.name }}
           retention-days: 5
           if-no-files-found: error
 

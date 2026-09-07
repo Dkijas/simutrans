@@ -17,8 +17,11 @@
 #   master's history.  Carrying a tag grants nothing: the Nightly tag is moved
 #   to whatever was pushed last and has already pointed at a work branch, and
 #   124.0 and 124.1 are not on master's history at all.  An unmerged commit can
-#   be rehearsed, but only when asked for by name and given as a full SHA, and
-#   what comes out is marked not for distribution.
+#   be admitted with allow_unmerged, but only when asked for by name and given
+#   as a full SHA, and it is then always marked not for distribution.
+# * Whether the result is meant for anyone is a separate input, `rehearsal`,
+#   on by default.  Marking is a label for humans: a rehearsal carries the same
+#   real signature as anything else.
 # * The build job has no access to any signing secret.  It installs Homebrew
 #   packages and downloads language files from the network; keeping the
 #   Developer ID out of that environment is the point of splitting the jobs.

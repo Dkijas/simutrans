@@ -301,6 +301,24 @@ job, so the exposure is limited to a machine that already has the decrypted
 rather than glossed over. It is another reason not to point this workflow at a
 persistent self-hosted runner.
 
+## One warning before you push a branch here
+
+Every other workflow in this repository is `on: [push]` with no branch filter.
+Pushing *any* branch therefore runs the whole nightly chain: it moves the
+`Nightly` tag to the pushed commit, rebuilds and overwrites the release
+assets, and publishes an Android build to the Play Store beta track.
+
+This workflow is not part of that — it only ever runs from
+`workflow_dispatch` — but the branch you push it on will still set the rest
+off. Expect it, or cancel the runs.
+
+A commit that does not come from the SVN mirror also gets no revision number:
+`tools/get_revision.sh` and `cmake/SimutransRevision.cmake` both read only
+`git log -1`, so a nightly built from such a commit is labelled `r1` in the
+binary and with the commit count in the release title. That is a pre-existing
+issue, unrelated to signing, and it is another reason these files should reach
+`master` through SVN rather than through a merge here.
+
 ## Relationship with SVN
 
 Simutrans develops in Subversion; this GitHub repository is a one-way mirror of

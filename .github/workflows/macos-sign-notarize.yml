@@ -13,14 +13,26 @@
 #   on a pull request.  pull_request_target is not used anywhere: running a
 #   contributor's code with the signing identity is exactly the accident this
 #   layout is meant to make impossible.
-# * The revision to sign is resolved to a full commit SHA and must be an
-#   ancestor of master or carry a tag in this repository.  An arbitrary branch
-#   or a fork ref cannot be signed.
+# * The revision to sign is resolved to a full commit SHA, which must be on
+#   master's history.  Carrying a tag grants nothing: the Nightly tag is moved
+#   to whatever was pushed last and has already pointed at a work branch, and
+#   124.0 and 124.1 are not on master's history at all.  An unmerged commit can
+#   be rehearsed, but only when asked for by name and given as a full SHA, and
+#   what comes out is marked not for distribution.
 # * The build job has no access to any signing secret.  It installs Homebrew
 #   packages and downloads language files from the network; keeping the
 #   Developer ID out of that environment is the point of splitting the jobs.
-# * The signing job takes only data from the build job, never code.  Its
-#   scripts come from the same trusted commit it is signing.
+# * The signing job takes only data from the build job, never code, and never
+#   checks out the product's source at all.  Its scripts come from the ref the
+#   run was dispatched from - the same commit this file was read from - not
+#   from the revision being signed.
+# * That data is checked before the identity is loaded: check-payload.sh
+#   rejects escaping symlinks, setuid files and stray content while the
+#   Developer ID is still nowhere near the machine.
+#
+# NOTE: GitHub only offers workflow_dispatch for a workflow that exists on the
+# repository's default branch, so this cannot be run from a pull request.  It
+# has to reach master first.
 #
 # See .github/macos/README.md for the secrets a maintainer has to configure
 # and for how to run this.

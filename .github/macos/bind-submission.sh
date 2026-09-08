@@ -3,83 +3,85 @@
 # This file is part of the Simutrans project under the Artistic License.
 # (see LICENSE.txt)
 #
-# Tie a submission id to the archive it was made from.
+# Tie a submission id to the exact archive it was made from.
 #
 # Usage: bind-submission.sh <preserved-dir> <uuid> <output-dir>
 #
-# Ordering, and why it is this way
-# --------------------------------
-# The archive is preserved and uploaded BEFORE it is submitted, with the
-# submission id left empty.  A runner that dies immediately after `submit`
-# then still leaves the signed bytes behind, which is the case that cost a
-# whole signing run on 2026-09-08.
+# Why this is a separate record
+# -----------------------------
+# A workflow artifact cannot be edited once it has been uploaded, and the
+# archive has to be uploaded BEFORE the submission so that a runner dying
+# immediately afterwards still leaves the signed bytes behind.  The id only
+# exists after that, so it is written as its own small record.
 #
-# The id only exists afterwards, so it is bound in a second, tiny record that
-# points back at the same archive by hash.  Nothing is re-encrypted and the
-# archive is not uploaded twice.
+# That record is encrypted with the same key, which authenticates it: a
+# separate file sitting next to a container proves nothing on its own.  It
+# names the payload by hash and the run it came from, so it cannot be lifted
+# onto a different package.
 #
-# If a submission was made but no id came back, nothing is bound.  The archive
-# is then preserved but UNRECONCILED: it cannot be resumed, and it must not be
-# resubmitted on the assumption that the first attempt failed - Apple may well
-# have it.  Reconciling means finding the id with `notarytool history` and
-# binding it deliberately.
+# If a submission was made and no id came back, nothing is bound.  The archive
+# stays recoverable, but it is UNRECONCILED: it cannot be resumed, and it must
+# not be resubmitted on the assumption that the first attempt failed, because
+# Apple may well have received it.  Reconciling means finding the id with
+# `notarytool history` and binding it deliberately.
 
 set -euo pipefail
+
+HERE=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
+# shellcheck source=/dev/null
+. "$HERE/artifact-lib.sh"
+# shellcheck source=/dev/null
+. "$HERE/notary-lib.sh"
 
 DIR=${1:?usage: bind-submission.sh <preserved-dir> <uuid> <output-dir>}
 UUID=${2:?usage: bind-submission.sh <preserved-dir> <uuid> <output-dir>}
 OUT=${3:?usage: bind-submission.sh <preserved-dir> <uuid> <output-dir>}
 
-HERE=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
-# shellcheck source=/dev/null
-. "$HERE/notary-lib.sh"
-
 if ! is_uuid "$UUID"; then
 	echo "::error::'$UUID' is not a submission UUID; refusing to bind it."
-	echo "::error::An archive bound to something that is not a submission id could"
-	echo "::error::never be resumed, and would hide the fact that the id was lost."
+	echo "::error::A record bound to something that is not a submission id could never"
+	echo "::error::be resumed, and would hide the fact that the id was lost."
 	exit 1
 fi
+artifact_key_present || { echo "::error::MACOS_ARTIFACT_KEY is not set."; exit 1; }
 
-manifest="$DIR/manifest.json"
-[ -f "$manifest" ] || { echo "::error::no manifest in $DIR."; exit 1; }
+container="$DIR/bundle.gpg"
+[ -f "$container" ] || { echo "::error::no container in $DIR."; exit 1; }
 
-zip_sha=$(json_field "$manifest" zip_sha256 || true)
-printf '%s' "$zip_sha" | grep -qE '^[0-9a-f]{64}$' || {
-	echo "::error::the preserved manifest has no usable zip_sha256; nothing to bind to."
-	exit 1
-}
+umask 077
+work=$(mktemp -d "${RUNNER_TEMP:-/tmp}/simu-bind.XXXXXX")
+trap 'rm -rf "$work"' EXIT INT TERM
+
+# Read the payload hash out of the authenticated container rather than from
+# anything lying beside it.
+artifact_decrypt "$container" "$work/container.tar" \
+	|| { echo "::error::the container could not be authenticated; refusing to bind."; exit 1; }
+mkdir -p "$work/in"
+tar -C "$work/in" -xf "$work/container.tar" manifest.json
+zip_sha=$(json_field "$work/in/manifest.json" zip_sha256 || true)
+run_id=$(json_field "$work/in/manifest.json" run_id || true)
+printf '%s' "$zip_sha" | grep -qE '^[0-9a-f]{64}$' \
+	|| { echo "::error::the container manifest has no usable zip_sha256."; exit 1; }
 
 mkdir -p "$OUT"
-umask 077
-
-# Carried forward field by field rather than patched in place, so the bound
-# record cannot silently inherit something unexpected.
-cat > "$OUT/manifest.json" <<MANIFEST
+cat > "$work/binding.json" <<BINDING
 {
-  "schema": "simutrans-macos-signed-artifact/1",
-  "created_utc": "$(json_field "$manifest" created_utc || echo '')",
+  "schema": "$ARTIFACT_CONTAINER_SCHEMA",
+  "record": "submission-binding",
   "bound_utc": "$(date -u '+%Y-%m-%dT%H:%M:%SZ')",
   "zip_sha256": "$zip_sha",
-  "zip_bytes": "$(json_field "$manifest" zip_bytes || echo '')",
-  "encrypted_sha256": "$(json_field "$manifest" encrypted_sha256 || echo '')",
-  "product_sha": "$(json_field "$manifest" product_sha || echo '')",
-  "workflow_sha": "$(json_field "$manifest" workflow_sha || echo '')",
-  "revision_id": "$(json_field "$manifest" revision_id || echo '')",
-  "arch": "$(json_field "$manifest" arch || echo '')",
-  "signing_identity": "$(json_field "$manifest" signing_identity || echo '')",
-  "team_id": "$(json_field "$manifest" team_id || echo '')",
-  "repository": "$(json_field "$manifest" repository || echo '')",
-  "run_id": "$(json_field "$manifest" run_id || echo '')",
-  "run_attempt": "$(json_field "$manifest" run_attempt || echo '')",
-  "not_for_distribution": "$(json_field "$manifest" not_for_distribution || echo '')",
+  "source_run_id": "$run_id",
+  "repository": "${GITHUB_REPOSITORY:-}",
+  "binding_run_id": "${GITHUB_RUN_ID:-}",
   "submission_id": "$UUID",
-  "submitted_utc": "$(date -u '+%Y-%m-%dT%H:%M:%SZ')",
   "notarization_status": "submitted, awaiting verdict"
 }
-MANIFEST
+BINDING
+
+artifact_encrypt "$work/binding.json" "$OUT/submission.gpg"
 
 echo "== submission bound to the preserved archive ==============="
-cat "$OUT/manifest.json"
+cat "$work/binding.json"
 echo
-echo "submission $UUID is now tied to the archive with sha256 $zip_sha"
+echo "submission $UUID tied to the archive with sha256 $zip_sha"
+echo "written to $OUT/submission.gpg (authenticated)"

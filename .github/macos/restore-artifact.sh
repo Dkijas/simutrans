@@ -7,20 +7,27 @@
 #
 # Usage: restore-artifact.sh <preserved-dir> <output.zip>
 #
-# Environment:
-#   MACOS_ARTIFACT_KEY        passphrase the archive was encrypted with
+# Required environment:
+#   MACOS_ARTIFACT_KEY        passphrase the container was made with
 #   EXPECT_PRODUCT_SHA        commit the product must have been built from
-#   EXPECT_SUBMISSION_ID      submission the archive must be bound to
-#   EXPECT_SIGNING_IDENTITY   identity it must have been signed with (optional)
+#   EXPECT_RUN_ID             run that must have produced it
+#   EXPECT_ARCH               architecture it must be
+# Optional:
+#   EXPECT_SIGNING_IDENTITY   identity it must have been signed with
 #
-# Everything here is checked against values the caller already knows from
-# somewhere else.  An artifact that says nice things about itself proves
-# nothing: the manifest travels with the ciphertext and could have been
-# rewritten, so it is the agreement between the manifest, the decrypted bytes
-# and what the caller independently expects that makes the restore trustworthy.
+# The expectations are REQUIRED, and that is the point of this script.
 #
-# Apple accepting a submission does not make a recovered file the right file.
-# Those are two separate questions and both have to be answered.
+# Authenticity and identity are two different questions.  The AEAD tag answers
+# the first: this container was made by someone with the key and has not been
+# altered.  It does not answer the second, because a DIFFERENT container, also
+# perfectly valid, also made with the same key, could be put in its place -
+# an older run, another architecture, another commit.  Nothing the package
+# says about itself can settle that; only comparing it against values the
+# caller already holds from somewhere else can.
+#
+# So: the container is authenticated first, opened second, and only then
+# checked against what the caller expected.  Content is never extracted before
+# its authenticity is established.
 
 set -euo pipefail
 
@@ -29,94 +36,90 @@ OUTZIP=${2:?usage: restore-artifact.sh <preserved-dir> <output.zip>}
 
 HERE=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 # shellcheck source=/dev/null
+. "$HERE/artifact-lib.sh"
+# shellcheck source=/dev/null
 . "$HERE/notary-lib.sh"
 
-manifest="$DIR/manifest.json"
-enc="$DIR/signed-bundle.zip.enc"
+fail() { echo "::error::$1"; exit 1; }
 
-fail() {
-	echo "::error::$1"
-	exit 1
-}
+container="$DIR/bundle.gpg"
+[ -f "$container" ] || fail "no encrypted container in $DIR; refusing to continue."
+artifact_key_present || fail "MACOS_ARTIFACT_KEY is not set; the container cannot be opened."
 
-[ -f "$manifest" ] || fail "no manifest in $DIR; refusing to use this artifact."
-[ -f "$enc" ]      || fail "no encrypted archive in $DIR; refusing to continue."
-[ -n "${MACOS_ARTIFACT_KEY:-}" ] || fail "MACOS_ARTIFACT_KEY is not set; the archive cannot be opened."
+# Independently known values.  Without them there is nothing to compare the
+# package against, and a valid-but-wrong package would sail through.
+for v in EXPECT_PRODUCT_SHA EXPECT_RUN_ID EXPECT_ARCH; do
+	[ -n "${!v:-}" ] || fail "$v must be provided. A container cannot be trusted to describe itself."
+done
+
+work=$(mktemp -d "${RUNNER_TEMP:-/tmp}/simu-restore.XXXXXX")
+trap 'rm -rf "$work"' EXIT INT TERM
 
 echo "== restoring the preserved archive ========================="
-echo "from     : $DIR"
+echo "from      : $DIR"
+echo "container : sha256 $(shasum -a 256 "$container" | awk '{print $1}')"
 
+# ---------------------------------------------------------------------------
+# 1. Authenticity, before anything is unpacked.
+# ---------------------------------------------------------------------------
+artifact_decrypt "$container" "$work/container.tar" \
+	|| fail "the container could not be authenticated and decrypted."
+echo "authenticated: AES-256 OCB tag verified"
+
+# Extract only the two members expected, into an empty directory.  A container
+# is not a place to accept arbitrary paths from.
+mkdir -p "$work/in"
+tar -C "$work/in" -xf "$work/container.tar" manifest.json payload.zip \
+	|| fail "the container does not hold the expected members."
+
+manifest="$work/in/manifest.json"
+payload="$work/in/payload.zip"
+[ -s "$manifest" ] || fail "the container has no manifest."
+[ -s "$payload" ]  || fail "the container has no payload."
+
+# ---------------------------------------------------------------------------
+# 2. The manifest is now trustworthy - it was inside the authenticated
+#    container - so its fields can be read.
+# ---------------------------------------------------------------------------
 schema=$(json_field "$manifest" schema || true)
-[ "$schema" = "simutrans-macos-signed-artifact/1" ] || \
-	fail "unrecognised manifest schema '${schema:-<none>}'; refusing to guess its meaning."
+[ "$schema" = "$ARTIFACT_CONTAINER_SCHEMA" ] \
+	|| fail "unrecognised container schema '${schema:-<none>}'; refusing to guess its meaning."
 
 zip_sha=$(json_field "$manifest" zip_sha256 || true)
-enc_sha_recorded=$(json_field "$manifest" encrypted_sha256 || true)
 product_sha=$(json_field "$manifest" product_sha || true)
-submission_id=$(json_field "$manifest" submission_id || true)
-identity=$(json_field "$manifest" signing_identity || true)
+run_id=$(json_field "$manifest" run_id || true)
 arch=$(json_field "$manifest" arch || true)
+identity=$(json_field "$manifest" signing_identity || true)
 revision_id=$(json_field "$manifest" revision_id || true)
 
 printf '  %-18s %s\n' "product" "${product_sha:-<none>}"
 printf '  %-18s %s\n' "revision" "${revision_id:-<none>}"
 printf '  %-18s %s\n' "arch" "${arch:-<none>}"
 printf '  %-18s %s\n' "identity" "${identity:-<none>}"
-printf '  %-18s %s\n' "submission" "${submission_id:-<none>}"
-echo
+printf '  %-18s %s\n' "source run" "${run_id:-<none>}"
 
-# Every field the rest of this depends on has to be present and well formed.
 printf '%s' "$zip_sha" | grep -qE '^[0-9a-f]{64}$' || fail "the manifest has no usable zip_sha256."
 
-# ---------------------------------------------------------------------------
-# 1. The ciphertext is the one the manifest describes.
-# ---------------------------------------------------------------------------
-enc_sha_actual=$(shasum -a 256 "$enc" | awk '{ print $1 }')
-if [ -n "$enc_sha_recorded" ] && [ "$enc_sha_actual" != "$enc_sha_recorded" ]; then
-	fail "the stored archive does not match its manifest (encrypted sha256 differs). It may be truncated or replaced."
-fi
+actual_sha=$(shasum -a 256 "$payload" | awk '{ print $1 }')
+[ "$actual_sha" = "$zip_sha" ] \
+	|| fail "the payload does not match its own manifest: $actual_sha != $zip_sha."
 
 # ---------------------------------------------------------------------------
-# 2. It decrypts, and to exactly the bytes that were preserved.
+# 3. Substitution defence: is this the package the caller meant, and not
+#    merely a valid one?
 # ---------------------------------------------------------------------------
-mkdir -p "$(dirname "$OUTZIP")"
-umask 077
-if ! openssl enc -d -aes-256-cbc -pbkdf2 -iter 600000 \
-		-in "$enc" -out "$OUTZIP" -pass env:MACOS_ARTIFACT_KEY 2>/dev/null; then
-	rm -f "$OUTZIP"
-	fail "the archive could not be decrypted. Either MACOS_ARTIFACT_KEY is not the key it was encrypted with, or the file is corrupt."
-fi
-
-actual_sha=$(shasum -a 256 "$OUTZIP" | awk '{ print $1 }')
-if [ "$actual_sha" != "$zip_sha" ]; then
-	rm -f "$OUTZIP"
-	fail "restored bytes do not match the manifest: got $actual_sha, expected $zip_sha."
-fi
-echo "decrypted and verified: sha256 $actual_sha"
-
-# ---------------------------------------------------------------------------
-# 3. It is the artifact the caller was expecting, not merely a valid one.
-# ---------------------------------------------------------------------------
-if [ -n "${EXPECT_PRODUCT_SHA:-}" ] && [ "$product_sha" != "$EXPECT_PRODUCT_SHA" ]; then
-	rm -f "$OUTZIP"
-	fail "this archive was built from $product_sha, but $EXPECT_PRODUCT_SHA was expected."
-fi
-
-if [ -n "${EXPECT_SUBMISSION_ID:-}" ]; then
-	if ! is_uuid "$submission_id"; then
-		rm -f "$OUTZIP"
-		fail "the manifest records no valid submission id, so this archive cannot be tied to a notarization result."
-	fi
-	if [ "$submission_id" != "$EXPECT_SUBMISSION_ID" ]; then
-		rm -f "$OUTZIP"
-		fail "this archive is bound to submission $submission_id, not to $EXPECT_SUBMISSION_ID. Stapling a ticket from a different submission would produce a package nobody can account for."
-	fi
-fi
-
+[ "$product_sha" = "$EXPECT_PRODUCT_SHA" ] \
+	|| fail "this container was built from '${product_sha}', but '$EXPECT_PRODUCT_SHA' was expected."
+[ "$run_id" = "$EXPECT_RUN_ID" ] \
+	|| fail "this container came from run '${run_id}', but run '$EXPECT_RUN_ID' was expected."
+[ "$arch" = "$EXPECT_ARCH" ] \
+	|| fail "this container is '${arch}', but '$EXPECT_ARCH' was expected."
 if [ -n "${EXPECT_SIGNING_IDENTITY:-}" ] && [ "$identity" != "$EXPECT_SIGNING_IDENTITY" ]; then
-	rm -f "$OUTZIP"
-	fail "this archive was signed as '$identity', not as '$EXPECT_SIGNING_IDENTITY'."
+	fail "this container was signed as '$identity', not as '$EXPECT_SIGNING_IDENTITY'."
 fi
+
+mkdir -p "$(dirname "$OUTZIP")"
+cp "$payload" "$OUTZIP"
 
 echo "provenance accepted"
-echo "restored to $OUTZIP"
+echo "restored to $OUTZIP (sha256 $actual_sha)"

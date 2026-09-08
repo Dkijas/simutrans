@@ -85,6 +85,14 @@ on:
         required: false
         type: boolean
         default: false
+      retention:
+        description: 'required = stop before signing if the archive cannot be preserved. none = sign anyway, accepting that a verdict arriving after the run cannot be used.'
+        required: true
+        type: choice
+        default: required
+        options:
+          - required
+          - none
 
 # Least privilege by default; jobs do not widen it.
 permissions:
@@ -466,6 +474,9 @@ jobs:
     runs-on: ${{ matrix.runner }}
     permissions:
       contents: read
+      # Read-only, and only so this job can confirm that the preserved archive
+      # really was stored before anything is sent to Apple.
+      actions: read
     # Protection rules on this environment are what actually authorises a
     # signing run: configure it with required reviewers so a human approves
     # before the identity is used.  A job that references an environment must
@@ -584,6 +595,46 @@ jobs:
           chmod +x .github/macos/*.sh
           .github/macos/check-payload.sh work simutrans/simutrans.app
 
+      # ---------------------------------------------------------------------
+      # The retention contract, checked BEFORE the identity is loaded.
+      #
+      # With retention=required, a key that is missing or cannot open what it
+      # encrypts stops the run here - before anything is signed.  Turning that
+      # into a warning and carrying on is what produced a signed bundle that
+      # could not be kept.
+      #
+      # What this can and cannot promise: it proves the key works, right now,
+      # on this machine.  It says nothing about whether the upload will
+      # succeed later, because that has not happened yet.  That failure is
+      # caught after signing and before submitting, which is the earliest it
+      # can honestly be caught at all.
+      # ---------------------------------------------------------------------
+      - name: Check the archive can be preserved
+        env:
+          MACOS_ARTIFACT_KEY: ${{ secrets.MACOS_ARTIFACT_KEY }}
+          RETENTION: ${{ inputs.retention }}
+        run: |
+          set -euo pipefail
+          chmod +x .github/macos/*.sh
+          # shellcheck source=/dev/null
+          . .github/macos/artifact-lib.sh
+          if [ "$RETENTION" = "required" ]; then
+            if ! artifact_selftest; then
+              echo "::error::retention is set to 'required' and the archive cannot be preserved."
+              echo "::error::Stopping before the signing identity is loaded.  Nothing has been"
+              echo "::error::signed.  Configure MACOS_ARTIFACT_KEY, or run again with"
+              echo "::error::retention=none and accept that a late verdict will be unusable."
+              exit 1
+            fi
+          else
+            echo "::warning::retention=none: the signed archive will not outlive this runner."
+            echo "::warning::If Apple answers after this run ends, the bundle cannot be"
+            echo "::warning::stapled and the work has to be redone from the build."
+            if artifact_key_present; then
+              echo "::warning::A key IS configured; retention=none ignores it deliberately."
+            fi
+          fi
+
       - name: Create the temporary keychain
         env:
           MACOS_CERTIFICATE_P12: ${{ secrets.MACOS_CERTIFICATE_P12 }}
@@ -632,15 +683,12 @@ jobs:
           SIMU_REVISION_ID: ${{ needs.resolve.outputs.revision_id }}
           SIMU_ARCH: ${{ matrix.arch }}
           SIMU_NOT_FOR_DISTRIBUTION: ${{ needs.resolve.outputs.not_for_distribution }}
+          RETENTION: ${{ inputs.retention }}
         run: |
           set -euo pipefail
-          if [ -z "${MACOS_ARTIFACT_KEY:-}" ]; then
-            # Not configured.  Signing still works; what is lost is the ability
-            # to use a verdict that arrives after this run has ended.
+          if [ "$RETENTION" != "required" ]; then
             echo "enabled=false" >> "$GITHUB_OUTPUT"
-            echo "::warning::MACOS_ARTIFACT_KEY is not configured, so the signed archive"
-            echo "::warning::will not outlive this runner.  If Apple answers after this run"
-            echo "::warning::finishes, the bundle has to be built and signed again."
+            echo "::warning::retention=none: not preserving the signed archive."
             exit 0
           fi
           echo "enabled=true" >> "$GITHUB_OUTPUT"
@@ -655,6 +703,29 @@ jobs:
           path: preserved/
           retention-days: 7
           if-no-files-found: error
+
+      # The upload is the part that cannot be checked in advance, so it is
+      # checked here: the artifact has to actually exist, with a size, before
+      # anything is sent to Apple.  Submitting first and discovering the
+      # archive was never stored is the failure this whole arrangement exists
+      # to prevent.
+      - name: Confirm the archive really was stored
+        if: steps.preserve.outputs.enabled == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          name="signed-bundle-${{ matrix.arch }}"
+          found=$(gh api "repos/${{ github.repository }}/actions/runs/${{ github.run_id }}/artifacts" \
+            --jq ".artifacts[] | select(.name == \"$name\" and .expired == false) | .size_in_bytes" | head -1)
+          if [ -z "$found" ] || [ "$found" -le 0 ]; then
+            echo "::error::the preserved archive is not retrievable from this run."
+            echo "::error::retention is 'required', so nothing will be submitted: a submission"
+            echo "::error::whose archive was not stored is exactly the situation that leaves a"
+            echo "::error::verdict with nothing to staple."
+            exit 1
+          fi
+          echo "artifact '$name' stored, $found bytes"
 
       - name: Notarize and staple
         id: notarize

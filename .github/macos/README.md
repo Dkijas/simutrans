@@ -414,7 +414,25 @@ sign, never loads the `.p12` and has no submit path.
 The archive is kept as a workflow artifact, and **a workflow artifact in a
 public repository is not private**: GitHub's documentation requires "read
 access to the repository" to download one, and on a public repository everyone
-has that. So what is stored is ciphertext, AES-256 with PBKDF2.
+has that. So what is stored is ciphertext: an OpenPGP message, AES-256 in
+**OCB** — an AEAD mode from RFC 7253 — produced by GnuPG, which is already on
+the runner.
+
+That mode is asked for explicitly, because GnuPG's default for symmetric
+encryption is not AEAD. Being accurate about what the default *is*: it is not
+an unprotected message either. OpenPGP's classic mode carries a Modification
+Detection Code and GnuPG refuses to return plaintext when it fails. The MDC is
+simply the weaker of the two — a SHA-1 construction bolted onto CFB rather
+than a modern authenticated mode. AEAD is chosen because it is better, not
+because the alternative is naked.
+
+Every container is inspected after it is made and rejected if it is not
+AES-256 OCB, since a default can move in either direction.
+
+`.github/macos/artifact-lib.sh` carries the full specification, including two
+things that are easy to misread: the `cb=` value in a packet dump is the
+chunk-size octet (2^(cb+6) octets), **not** the tag length; and the S2K count
+is a number of octets fed to the hash, **not** a number of iterations.
 
 Encryption does not settle who may read it, how long it lives, or how it is
 checked. Those are separate, and they are:

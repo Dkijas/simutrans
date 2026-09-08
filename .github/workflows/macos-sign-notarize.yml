@@ -600,18 +600,86 @@ jobs:
           MACOS_TEAM_ID: ${{ vars.MACOS_TEAM_ID }}
         run: .github/macos/sign.sh work/simutrans/simutrans.app
 
-      - name: Notarize and staple
-        env:
-          MACOS_NOTARY_API_KEY_P8: ${{ secrets.MACOS_NOTARY_API_KEY_P8 }}
-          MACOS_NOTARY_API_KEY_ID: ${{ secrets.MACOS_NOTARY_API_KEY_ID }}
-          MACOS_NOTARY_API_ISSUER_ID: ${{ secrets.MACOS_NOTARY_API_ISSUER_ID }}
+      # ---------------------------------------------------------------------
+      # Preserve the signed archive BEFORE submitting it.
+      #
+      # The order is the point.  On 2026-09-08 a bundle was signed and
+      # submitted, the run ended before Apple answered, and the signed bytes
+      # went with the runner - so a later acceptance had nothing left to
+      # staple.  Preserving after the submit would leave the same gap for a
+      # run that dies in between.
+      #
+      # It is encrypted because a workflow artifact in a public repository is
+      # not private: GitHub requires "read access to the repository", and on a
+      # public repository everyone has that.
+      # ---------------------------------------------------------------------
+      - name: Build the archive to submit
         run: |
           set -euo pipefail
           # Built from the signed bundle, and only used for the submission.
           # Apple does not staple zip archives, so the ticket goes onto the
           # .app and the distribution archive is rebuilt afterwards.
           /usr/bin/ditto -c -k --keepParent work/simutrans/simutrans.app "${RUNNER_TEMP}/notarize.zip"
-          .github/macos/notarize.sh "${RUNNER_TEMP}/notarize.zip" work/simutrans/simutrans.app
+
+      - name: Preserve the signed archive
+        id: preserve
+        env:
+          MACOS_ARTIFACT_KEY: ${{ secrets.MACOS_ARTIFACT_KEY }}
+          MACOS_SIGNING_IDENTITY: ${{ vars.MACOS_SIGNING_IDENTITY }}
+          MACOS_TEAM_ID: ${{ vars.MACOS_TEAM_ID }}
+          SIMU_PRODUCT_SHA: ${{ needs.resolve.outputs.sha }}
+          SIMU_WORKFLOW_SHA: ${{ github.sha }}
+          SIMU_REVISION_ID: ${{ needs.resolve.outputs.revision_id }}
+          SIMU_ARCH: ${{ matrix.arch }}
+          SIMU_NOT_FOR_DISTRIBUTION: ${{ needs.resolve.outputs.not_for_distribution }}
+        run: |
+          set -euo pipefail
+          if [ -z "${MACOS_ARTIFACT_KEY:-}" ]; then
+            # Not configured.  Signing still works; what is lost is the ability
+            # to use a verdict that arrives after this run has ended.
+            echo "enabled=false" >> "$GITHUB_OUTPUT"
+            echo "::warning::MACOS_ARTIFACT_KEY is not configured, so the signed archive"
+            echo "::warning::will not outlive this runner.  If Apple answers after this run"
+            echo "::warning::finishes, the bundle has to be built and signed again."
+            exit 0
+          fi
+          echo "enabled=true" >> "$GITHUB_OUTPUT"
+          .github/macos/preserve-artifact.sh "${RUNNER_TEMP}/notarize.zip" preserved
+
+      - name: Upload the preserved archive
+        if: steps.preserve.outputs.enabled == 'true'
+        # actions/upload-artifact v7.0.1
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: signed-bundle-${{ matrix.arch }}
+          path: preserved/
+          retention-days: 7
+          if-no-files-found: error
+
+      - name: Notarize and staple
+        id: notarize
+        env:
+          MACOS_NOTARY_API_KEY_P8: ${{ secrets.MACOS_NOTARY_API_KEY_P8 }}
+          MACOS_NOTARY_API_KEY_ID: ${{ secrets.MACOS_NOTARY_API_KEY_ID }}
+          MACOS_NOTARY_API_ISSUER_ID: ${{ secrets.MACOS_NOTARY_API_ISSUER_ID }}
+        run: .github/macos/notarize.sh "${RUNNER_TEMP}/notarize.zip" work/simutrans/simutrans.app
+
+      # Runs even when notarization did not finish: a submission still in
+      # progress is exactly the case this record exists for.  Without it the
+      # preserved archive cannot be tied to a verdict later.
+      - name: Bind the submission to the preserved archive
+        if: always() && steps.preserve.outputs.enabled == 'true' && steps.notarize.outputs.submission_id != ''
+        run: .github/macos/bind-submission.sh preserved "${{ steps.notarize.outputs.submission_id }}" binding
+
+      - name: Upload the submission binding
+        if: always() && steps.preserve.outputs.enabled == 'true' && steps.notarize.outputs.submission_id != ''
+        # actions/upload-artifact v7.0.1
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: submission-${{ matrix.arch }}
+          path: binding/
+          retention-days: 7
+          if-no-files-found: error
 
       - name: Build the distribution archive
         id: archive

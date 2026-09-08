@@ -387,6 +387,58 @@ A hash records which bytes were used. It does not let anyone fetch those bytes
 again. If a specific build has to be reproducible later, the archive is the
 only thing that makes it so, and it has to be kept.
 
+## Surviving a verdict that arrives too late
+
+Apple does not always answer while the run is still there. On 2026-09-08 a
+bundle was signed and submitted, the run ended with the submission still being
+processed, and the signed bytes went with the runner — so an acceptance
+arriving later had nothing left to staple.
+
+Two things fix that, and they are separate.
+
+**The archive is preserved before it is submitted.** Not after: a run that dies
+between the submit and the upload would leave the same gap. The submission id
+only exists afterwards, so it is bound to the archive in a second, tiny record
+(`bind-submission.sh`) that points back at the same bytes by hash. If a
+submission was made but no id came back, nothing is bound and the archive is
+marked unreconciled — it cannot be resumed, and it must not be resubmitted on
+the assumption the first attempt failed.
+
+**A separate workflow finishes the job.** `macOS finish notarization (resume)`
+recovers the archive, asks Apple about the submission it is bound to,
+and only staples if the answer is `Accepted`. It does not build, does not
+sign, never loads the `.p12` and has no submit path.
+
+### Why it is encrypted
+
+The archive is kept as a workflow artifact, and **a workflow artifact in a
+public repository is not private**: GitHub's documentation requires "read
+access to the repository" to download one, and on a public repository everyone
+has that. So what is stored is ciphertext, AES-256 with PBKDF2.
+
+Encryption does not settle who may read it, how long it lives, or how it is
+checked. Those are separate, and they are:
+
+* **access** — whoever holds `MACOS_ARTIFACT_KEY`, an environment secret behind
+  the same reviewer gate as the signing identity;
+* **retention** — 7 days, set by `retention-days` on the upload;
+* **integrity** — the sha256 of the plaintext is in the manifest and is
+  re-checked on every restore, along with the product commit, the submission id
+  and the signing identity, against values the resuming run already knows.
+
+`MACOS_ARTIFACT_KEY` is optional. Without it, signing still works and the
+workflow says plainly that a late verdict will not be usable.
+
+### What is never in the artifact
+
+No `.p12`, no `.p8`, no password, no keychain. The manifest is descriptive
+only, and `preserve-artifact.sh` refuses to write one that looks like it
+contains credential material.
+
+**Apple accepting a submission is not on its own permission to finish.** The
+recovered archive still has to prove it is the archive that was submitted.
+Both questions are asked, separately, and either one failing stops the run.
+
 ## What has been validated, and what has not
 
 Being a draft and being unvalidated are different things; so are these five

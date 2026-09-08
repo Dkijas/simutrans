@@ -32,8 +32,17 @@ HERE=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 # shellcheck source=/dev/null
 . "$HERE/notary-lib.sh"
 
+# --require-accepted turns the last verdict into the exit status, so a caller
+# that must not continue on anything but Accepted does not have to grep for it.
+REQUIRE_ACCEPTED=0
+if [ "${1:-}" = "--require-accepted" ]; then
+	REQUIRE_ACCEPTED=1
+	shift
+fi
+EXIT_NOT_ACCEPTED=6
+
 if [ "$#" -eq 0 ]; then
-	echo "usage: notary-status.sh <uuid> [<uuid> ...]" >&2
+	echo "usage: notary-status.sh [--require-accepted] <uuid> [<uuid> ...]" >&2
 	exit 64
 fi
 
@@ -175,5 +184,13 @@ echo "============================================================"
 if [ "$query_failures" -gt 0 ]; then
 	echo "::error::$query_failures submission(s) could not be queried."
 	exit 4
+fi
+
+if [ "$REQUIRE_ACCEPTED" -eq 1 ] && [ "$accepted" -ne "$#" ]; then
+	echo "::error::--require-accepted: $accepted of $# submission(s) are Accepted."
+	echo "::error::Refusing to report success.  A submission that is still In Progress"
+	echo "::error::has not been rejected, but it has not been accepted either, and"
+	echo "::error::nothing may be stapled or described as notarized on that basis."
+	exit "$EXIT_NOT_ACCEPTED"
 fi
 exit 0

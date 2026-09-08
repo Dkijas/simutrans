@@ -235,6 +235,29 @@ jobs:
           .github/macos/verify.sh "dist/${{ steps.archive.outputs.name }}" \
             "${{ inputs.architecture }}" "$symlinks"
 
+      # The finished archive must not die with the runner either.  Same
+      # container, same key, same seven days; it is not uploaded in the clear.
+      - name: Preserve the finished archive
+        env:
+          MACOS_ARTIFACT_KEY: ${{ secrets.MACOS_ARTIFACT_KEY }}
+          MACOS_SIGNING_IDENTITY: ${{ vars.MACOS_SIGNING_IDENTITY }}
+          MACOS_TEAM_ID: ${{ vars.MACOS_TEAM_ID }}
+          SIMU_PRODUCT_SHA: ${{ inputs.product_sha }}
+          SIMU_WORKFLOW_SHA: ${{ github.sha }}
+          SIMU_REVISION_ID: 'final-stapled'
+          SIMU_ARCH: ${{ inputs.architecture }}
+          SIMU_NOT_FOR_DISTRIBUTION: 'true'
+        run: .github/macos/preserve-artifact.sh "dist/${{ steps.archive.outputs.name }}" final
+
+      - name: Upload the preserved finished archive
+        # actions/upload-artifact v7.0.1
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: final-archive-${{ inputs.architecture }}
+          path: final/
+          retention-days: 7
+          if-no-files-found: error
+
       - name: Summarise
         if: always()
         run: |

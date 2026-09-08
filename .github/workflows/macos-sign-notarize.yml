@@ -740,6 +740,13 @@ jobs:
       # preserved archive cannot be tied to a verdict later.
       - name: Bind the submission to the preserved archive
         if: always() && steps.preserve.outputs.enabled == 'true' && steps.notarize.outputs.submission_id != ''
+        env:
+          # Without this the step cannot open the container it is binding to.
+          # Its absence here cost a completed run on 2026-09-08: Apple had
+          # already accepted, the bundle was already stapled, and the binding
+          # failed with "MACOS_ARTIFACT_KEY is not set", which took the rest
+          # of the job down with it.
+          MACOS_ARTIFACT_KEY: ${{ secrets.MACOS_ARTIFACT_KEY }}
         run: .github/macos/bind-submission.sh preserved "${{ steps.notarize.outputs.submission_id }}" binding
 
       - name: Upload the submission binding

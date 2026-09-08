@@ -11,8 +11,25 @@ executed. This fork exists so it can be executed first.
 
 ## Every difference from the production branch
 
-Two, and no more. Both are listed here so that the production patch can be
+Three, and no more. All are listed here so that the production patch can be
 checked against this list.
+
+### 0. Two synthetic-rehearsal workflows that do not exist in production
+
+    lab-synthetic-retention-producer.yml
+    lab-synthetic-retention-consumer.yml
+
+They rehearse the retention transport with a fake package: the producer
+stores one, the consumer recovers it from a different run on a different
+runner. They build nothing, sign nothing, touch no Developer ID and no
+notarization credential, and declare no `environment:`, so no production
+secret is reachable from them at all.
+
+The key they use is published in the workflow files and marked TEST-ONLY, and
+the payload is synthetic. So what they demonstrate is **transport and
+integrity** - that a container survives GitHub's artifact storage and comes
+back byte for byte. They demonstrate nothing about confidentiality or about
+custody of a real key, and must not be described as if they did.
 
 ### 1. Eight publishing workflows are deleted
 

@@ -1,0 +1,149 @@
+#
+# LAB ONLY - NOT PART OF THE PRODUCT.  See LAB-ONLY.md.
+#
+# Consumer half of the synthetic retention rehearsal.  It runs as a separate
+# workflow, in a separate run, on a separate runner, and recovers what the
+# producer stored.  That separation is the whole point: a local test can show
+# that encrypt and decrypt agree, but not that a container survives GitHub's
+# artifact storage and comes back byte for byte on another machine.
+#
+# No Developer ID, no notarization credentials, no submit, no `environment:`.
+# The key is the published TEST-ONLY fixture key.
+#
+name: LAB synthetic retention (consumer)
+
+on:
+  workflow_dispatch:
+    inputs:
+      producer_run_id:
+        description: 'Run id of the producer run to recover from.'
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  consume:
+    name: Recover and verify from another run
+    runs-on: macos-15-intel
+    permissions:
+      contents: read
+      actions: read
+    timeout-minutes: 20
+    env:
+      MACOS_ARTIFACT_KEY: 'SYNTHETIC-FIXTURE-KEY-NOT-A-SECRET-do-not-reuse'
+      SYNTHETIC_PRODUCT_SHA: '0000000000000000000000000000000000000000'
+      SYNTHETIC_SUBMISSION: '00000000-1111-2222-3333-444444444444'
+    steps:
+      - name: Validate the input
+        env:
+          RUN_ID: ${{ inputs.producer_run_id }}
+        run: |
+          set -euo pipefail
+          printf '%s' "$RUN_ID" | grep -qE '^[0-9]{1,20}$' \
+            || { echo "::error::producer_run_id must be a number."; exit 1; }
+
+      - name: Checkout the scripts
+        # actions/checkout v6.0.0
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+        with:
+          sparse-checkout: .github/macos
+          sparse-checkout-cone-mode: false
+
+      - name: Identify the artifacts precisely
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          # Repository, run and artifact id - not "the newest one called that".
+          gh api "repos/${{ github.repository }}/actions/runs/${{ inputs.producer_run_id }}/artifacts" \
+            --jq '.artifacts[] | "\(.name)  id=\(.id)  \(.size_in_bytes) bytes  expired=\(.expired)"'
+
+      - name: Download the container
+        # actions/download-artifact v8.0.1
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+        with:
+          name: signed-bundle-x86_64
+          path: preserved
+          run-id: ${{ inputs.producer_run_id }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Download the binding
+        # actions/download-artifact v8.0.1
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+        with:
+          name: submission-x86_64
+          path: binding
+          run-id: ${{ inputs.producer_run_id }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Authenticate and recover
+        env:
+          EXPECT_PRODUCT_SHA: ${{ env.SYNTHETIC_PRODUCT_SHA }}
+          EXPECT_RUN_ID: ${{ inputs.producer_run_id }}
+          EXPECT_ARCH: x86_64
+        run: |
+          set -euo pipefail
+          chmod +x .github/macos/*.sh
+          .github/macos/restore-artifact.sh preserved "${RUNNER_TEMP}/recovered.zip"
+
+      - name: Check the binding
+        env:
+          EXPECT_RUN_ID: ${{ inputs.producer_run_id }}
+          EXPECT_SUBMISSION_ID: ${{ env.SYNTHETIC_SUBMISSION }}
+        run: .github/macos/verify-binding.sh binding "${RUNNER_TEMP}/recovered.zip"
+
+      - name: Unpack and check the payload
+        run: |
+          set -euo pipefail
+          mkdir -p work
+          /usr/bin/ditto -x -k "${RUNNER_TEMP}/recovered.zip" work
+          .github/macos/check-payload.sh work simutrans.app
+
+      - name: Verify the fixture came back intact
+        run: |
+          set -euo pipefail
+          app=work/simutrans.app
+          echo "--- what came back ---"
+          find "$app" -exec ls -ld {} \;
+
+          fail=0
+          note() { echo "::error::$1"; fail=1; }
+
+          # Content
+          grep -q 'synthetic test executable' "$app/Contents/MacOS/simutrans" || note "executable content changed"
+          [ "$(cat "$app/Contents/Resources/simutrans/a.tab")" = "known content A" ] || note "a.tab content changed"
+          [ "$(cat "$app/Contents/Resources/simutrans/b.tab")" = "known content B" ] || note "b.tab content changed"
+
+          # Symlink, and that it still points where it did
+          link="$app/Contents/Frameworks/libfixture.1.dylib"
+          [ -L "$link" ] || note "the internal symlink did not survive"
+          [ "$(readlink "$link")" = "libfixture.1.2.3.dylib" ] || note "the symlink points somewhere else"
+
+          # Permissions
+          [ -x "$app/Contents/MacOS/simutrans" ] || note "the executable bit did not survive"
+          [ -x "$app/Contents/Resources/simutrans/helper.sh" ] || note "helper.sh lost its executable bit"
+          [ -x "$app/Contents/Resources/simutrans/a.tab" ] && note "a.tab gained an executable bit"
+
+          [ "$fail" -eq 0 ] || { echo "::error::the fixture did not survive the round trip."; exit 1; }
+          echo "fixture verified: content, symlink target and permissions all intact"
+
+      - name: Summarise
+        if: always()
+        run: |
+          set -euo pipefail
+          {
+            echo "### Synthetic retention: consumer"
+            echo
+            echo "| | |"
+            echo "|---|---|"
+            echo "| producer run | ${{ inputs.producer_run_id }} |"
+            echo "| this run | ${{ github.run_id }} |"
+            echo "| producer runner | macos-15 (arm64) |"
+            echo "| consumer runner | macos-15-intel (x64) |"
+            echo "| result | ${{ job.status }} |"
+            echo
+            echo "Transport and integrity across two runs and two runners."
+            echo "Confidentiality is NOT demonstrated: the key is published."
+          } >> "$GITHUB_STEP_SUMMARY"

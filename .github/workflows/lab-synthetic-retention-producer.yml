@@ -1,0 +1,143 @@
+#
+# LAB ONLY - NOT PART OF THE PRODUCT.  See LAB-ONLY.md.
+#
+# Producer half of a synthetic retention rehearsal.  It builds a fake package,
+# preserves it with the real retention code, and uploads it.  The consumer
+# workflow then recovers it from a DIFFERENT run on a DIFFERENT runner, which
+# is the thing that local tests cannot demonstrate.
+#
+# What it does not touch:
+#   * no Simutrans build, no compilation of anything
+#   * no Developer ID, no .p12, no keychain
+#   * no notarization credentials, no submit
+#   * no `environment:`, so no production secret is even reachable from here
+#
+# The key below is a FIXTURE, published in this file on purpose.  The payload
+# is synthetic and contains nothing worth protecting, so this rehearsal
+# demonstrates TRANSPORT AND INTEGRITY - that a container survives the trip
+# between two runs and is still exactly what was put in.  It demonstrates
+# nothing about confidentiality or about custody of a real key, and must not
+# be described as if it did.
+#
+name: LAB synthetic retention (producer)
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  produce:
+    name: Build, preserve and upload a synthetic package
+    runs-on: macos-15
+    permissions:
+      contents: read
+      actions: read
+    timeout-minutes: 20
+    env:
+      # TEST-ONLY.  Never used for anything real, never reused for
+      # MACOS_ARTIFACT_KEY, and deliberately not a secret.
+      MACOS_ARTIFACT_KEY: 'SYNTHETIC-FIXTURE-KEY-NOT-A-SECRET-do-not-reuse'
+      SYNTHETIC_PRODUCT_SHA: '0000000000000000000000000000000000000000'
+      SYNTHETIC_SUBMISSION: '00000000-1111-2222-3333-444444444444'
+    steps:
+      - name: Checkout the scripts
+        # actions/checkout v6.0.0
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+        with:
+          sparse-checkout: .github/macos
+          sparse-checkout-cone-mode: false
+
+      - name: Build the synthetic fixture
+        id: fixture
+        run: |
+          set -euo pipefail
+          # Shaped like the real thing: nested directories, files of known
+          # content, an internal symlink, and the permissions the packaging
+          # actually produces.  No certificate, no key, no personal data and
+          # no real signed binary.
+          root=fixture/simutrans.app
+          mkdir -p "$root/Contents/MacOS" "$root/Contents/Frameworks" "$root/Contents/Resources/simutrans"
+
+          printf '#!/bin/sh\necho "synthetic test executable, not simutrans"\n' > "$root/Contents/MacOS/simutrans"
+          chmod 755 "$root/Contents/MacOS/simutrans"
+
+          printf 'synthetic library content v1.2.3\n' > "$root/Contents/Frameworks/libfixture.1.2.3.dylib"
+          chmod 444 "$root/Contents/Frameworks/libfixture.1.2.3.dylib"
+          ln -s libfixture.1.2.3.dylib "$root/Contents/Frameworks/libfixture.1.dylib"
+
+          printf 'known content A\n' > "$root/Contents/Resources/simutrans/a.tab"
+          printf 'known content B\n' > "$root/Contents/Resources/simutrans/b.tab"
+          chmod 644 "$root/Contents/Resources/simutrans/"*.tab
+          printf '#!/bin/sh\necho helper\n' > "$root/Contents/Resources/simutrans/helper.sh"
+          chmod 755 "$root/Contents/Resources/simutrans/helper.sh"
+          printf '<plist/>' > "$root/Contents/Info.plist"
+
+          echo "--- fixture ---"
+          find fixture -exec ls -ld {} \;
+          echo "symlinks: $(find fixture -type l | wc -l | tr -d ' ')"
+
+          /usr/bin/ditto -c -k --keepParent "$root" "${RUNNER_TEMP}/synthetic.zip"
+          sha=$(shasum -a 256 "${RUNNER_TEMP}/synthetic.zip" | awk '{print $1}')
+          echo "zip_sha256=$sha" >> "$GITHUB_OUTPUT"
+          echo "payload sha256: $sha"
+
+      - name: Preserve it with the real retention code
+        env:
+          SIMU_PRODUCT_SHA: ${{ env.SYNTHETIC_PRODUCT_SHA }}
+          SIMU_WORKFLOW_SHA: ${{ github.sha }}
+          SIMU_REVISION_ID: 'synthetic'
+          SIMU_ARCH: x86_64
+          MACOS_SIGNING_IDENTITY: 'SYNTHETIC FIXTURE - NOT A REAL IDENTITY'
+          MACOS_TEAM_ID: 'SYNTHETIC0'
+          SIMU_NOT_FOR_DISTRIBUTION: 'true'
+        run: |
+          set -euo pipefail
+          chmod +x .github/macos/*.sh
+          .github/macos/preserve-artifact.sh "${RUNNER_TEMP}/synthetic.zip" preserved
+
+      - name: Bind a synthetic submission id
+        run: .github/macos/bind-submission.sh preserved "$SYNTHETIC_SUBMISSION" binding
+
+      - name: Upload the container
+        # actions/upload-artifact v7.0.1
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: signed-bundle-x86_64
+          path: preserved/
+          retention-days: 1
+          if-no-files-found: error
+
+      - name: Upload the binding
+        # actions/upload-artifact v7.0.1
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: submission-x86_64
+          path: binding/
+          retention-days: 1
+          if-no-files-found: error
+
+      - name: Record what to give the consumer
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          # Artifact IDs, so the consumer can be pointed at exactly these and
+          # not at "the most recent thing with that name".
+          gh api "repos/${{ github.repository }}/actions/runs/${{ github.run_id }}/artifacts" \
+            --jq '.artifacts[] | "\(.name)  id=\(.id)  \(.size_in_bytes) bytes  expires \(.expires_at)"' \
+            | tee artifact-ids.txt
+          {
+            echo "### Synthetic retention: producer"
+            echo
+            echo "Give the consumer this run id: \`${{ github.run_id }}\`"
+            echo
+            echo '```text'
+            cat artifact-ids.txt
+            echo "payload sha256 ${{ steps.fixture.outputs.zip_sha256 }}"
+            echo '```'
+            echo
+            echo "Fixture key is TEST-ONLY and published in the workflow file."
+            echo "This rehearses transport and integrity, not confidentiality."
+          } >> "$GITHUB_STEP_SUMMARY"

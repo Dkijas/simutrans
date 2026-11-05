@@ -1,0 +1,11 @@
+--- a/.github/macos/notarize.sh	2026-11-05 06:02:14.477018520 +0100
++++ b/.github/macos/notarize.sh	2026-11-05 06:02:14.488061935 +0100
+@@ -270,7 +270,7 @@
+ # ---------------------------------------------------------------------------
+ echo
+ echo "== stapling ================================================"
+-if ! stapler_run staple "$APP"; then
++if ! xcrun stapler staple "$APP"; then
+ 	echo "::error::the notarization ticket could not be stapled to $APP."
+ 	echo "::error::The artifact would then need an online Gatekeeper check on"
+ 	echo "::error::first launch, so it is not shipped in this state."

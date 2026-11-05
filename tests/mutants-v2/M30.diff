@@ -1,0 +1,10 @@
+--- a/.github/macos/artifact-lib.sh	2026-11-05 06:02:16.374883671 +0100
++++ b/.github/macos/artifact-lib.sh	2026-11-05 06:02:16.383661952 +0100
+@@ -166,7 +166,6 @@
+ artifact_decrypt() {
+ 	local in=$1 out=$2
+ 	artifact_key_present || { echo "::error::MACOS_ARTIFACT_KEY is not set."; return 1; }
+-	artifact_assert_aead "$in" || return 1
+ 	umask 077
+ 	if ! printf '%s' "$MACOS_ARTIFACT_KEY" \
+ 			| gpg "${_gpg_common[@]}" --decrypt --output "$out" "$in" 2>/dev/null; then

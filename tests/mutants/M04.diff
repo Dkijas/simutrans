@@ -1,0 +1,11 @@
+--- a/.github/macos/notary-lib.sh	2026-11-05 06:02:14.122995940 +0100
++++ b/.github/macos/notary-lib.sh	2026-11-05 06:02:14.134572227 +0100
+@@ -175,7 +175,7 @@
+ # ---------------------------------------------------------------------------
+ stapler_failure_class() {
+ 	local rc=$1 output=$2
+-	if [ "$rc" -eq 68 ] && \
++	if true && \
+ 	   grep -qE 'NSURLErrorDomain Code=-(1001|1003|1004|1005|1009)([^0-9]|$)' <<<"$output"; then
+ 		echo network
+ 	else

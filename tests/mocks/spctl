@@ -1,0 +1,7 @@
+#!/bin/bash
+if [ -f "$MOCK_DIR/spctl.reject" ]; then
+	echo "simutrans.app: rejected"
+	exit 3
+fi
+echo "simutrans.app: accepted"
+echo "source=Notarized Developer ID"

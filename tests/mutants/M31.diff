@@ -1,0 +1,11 @@
+--- a/.github/workflows/macos-sign-notarize.yml	2026-11-05 06:02:15.127667455 +0100
++++ b/.github/workflows/macos-sign-notarize.yml	2026-11-05 06:02:15.138938417 +0100
+@@ -1073,7 +1073,7 @@
+   publish:
+     name: Attach to the Nightly release
+     needs: [resolve, sign]
+-    if: needs.resolve.outputs.publish == 'true'
++    if: always() && needs.resolve.outputs.publish == 'true'
+     runs-on: ubuntu-24.04
+     permissions:
+       contents: write

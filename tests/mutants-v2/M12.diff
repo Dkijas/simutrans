@@ -1,0 +1,11 @@
+--- a/.github/macos/notarize.sh	2026-11-05 06:02:15.685218035 +0100
++++ b/.github/macos/notarize.sh	2026-11-05 06:02:15.696142885 +0100
+@@ -279,7 +279,7 @@
+ 
+ echo "--- stapler validate"
+ # No set -e in this script, so a failure has to stop it explicitly.
+-if ! stapler_run validate "$APP"; then
++if ! { stapler_run validate "$APP"; true; }; then
+ 	echo "::error::the ticket stapled to $APP could not be validated."
+ 	exit 1
+ fi

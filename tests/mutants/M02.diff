@@ -1,0 +1,11 @@
+--- a/.github/macos/notary-lib.sh	2026-11-05 06:02:14.050733722 +0100
++++ b/.github/macos/notary-lib.sh	2026-11-05 06:02:14.060958455 +0100
+@@ -191,7 +191,7 @@
+ # as Apple's DTS advises: at once with -v, then after a delay.  Only stapler itself
+ # can report success.  Returns stapler's last exit status.
+ # ---------------------------------------------------------------------------
+-STAPLER_MAX_ATTEMPTS=4
++STAPLER_MAX_ATTEMPTS=5
+ 
+ stapler_run() {
+ 	local action=$1 target=$2

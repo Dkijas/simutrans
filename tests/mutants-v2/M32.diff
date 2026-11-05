@@ -1,0 +1,10 @@
+--- a/.github/workflows/macos-sign-notarize.yml	2026-11-05 06:02:16.445368352 +0100
++++ b/.github/workflows/macos-sign-notarize.yml	2026-11-05 06:02:16.455598494 +0100
+@@ -952,6 +952,7 @@
+           ls -l dist
+ 
+       - name: Verify the archive that would be shipped
++        continue-on-error: true
+         run: |
+           set -euo pipefail
+           .github/macos/verify.sh \

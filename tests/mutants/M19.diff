@@ -1,0 +1,11 @@
+--- a/.github/workflows/macos-notarize-resume.yml	2026-11-05 06:02:14.697112887 +0100
++++ b/.github/workflows/macos-notarize-resume.yml	2026-11-05 06:02:14.707668575 +0100
+@@ -214,7 +214,7 @@
+         run: |
+           set -euo pipefail
+           . .github/macos/notary-lib.sh
+-          stapler_run staple "${{ steps.bundle.outputs.app }}"
++          xcrun stapler staple "${{ steps.bundle.outputs.app }}"
+           stapler_run validate "${{ steps.bundle.outputs.app }}"
+ 
+       - name: Build the finished archive

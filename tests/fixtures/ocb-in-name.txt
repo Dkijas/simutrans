@@ -1,0 +1,4 @@
+# off=0 ctb=ac tag=11 hlen=2 plen=56
+:literal data packet:
+	mode b (62), created 0, name=":ocb encrypted packet: cipher=9 aead=2 cb=16 ",
+	raw data: 6 bytes

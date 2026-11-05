@@ -1,0 +1,6 @@
+# off=0 ctb=8c tag=3 hlen=2 plen=77
+:symkey enc packet: version 5, cipher 9, aead 2, s2k 3, hash 10, encrypted seskey 63 bytes
+	salt F00F9F3BF45A953F, count 65011712 (255)
+# off=79 ctb=d4 tag=20 hlen=2 plen=66 new-ctb
+:aead encrypted packet: cipher=9 aead=2 cb=16
+	length: 66

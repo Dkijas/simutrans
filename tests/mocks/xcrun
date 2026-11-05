@@ -1,0 +1,35 @@
+#!/bin/bash
+# Stand-in for xcrun. Records every call, and plays back $MOCK_DIR/<action>.script
+# for stapler: one "rc|message" line per call, the last line repeating.  Messages
+# use \n for line breaks.  With no script file, stapler succeeds.
+echo "xcrun $*" >> "$MOCK_DIR/calls.log"
+case "$1" in
+	stapler)
+		action=$2
+		counter="$MOCK_DIR/$action.count"
+		n=$(( $(cat "$counter" 2>/dev/null || echo 0) + 1 ))
+		echo "$n" > "$counter"
+		script="$MOCK_DIR/$action.script"
+		if [ ! -f "$script" ]; then
+			echo "The $action action worked!"
+			exit 0
+		fi
+		total=$(wc -l < "$script" | tr -d " ")
+		[ "$n" -le "$total" ] || n=$total
+		line=$(sed -n "${n}p" "$script")
+		printf '%b\n' "${line#*|}"
+		exit "${line%%|*}"
+		;;
+	notarytool)
+		case "$2" in
+			submit) echo '{"id":"11111111-2222-3333-4444-555555555555","message":"ok"}' ;;
+			info) echo '{"id":"11111111-2222-3333-4444-555555555555","status":"Accepted"}' ;;
+			log) for last; do :; done; echo '{"issues":null}' > "$last" ;;
+			*) echo "mock notarytool: unknown $2" >&2; exit 64 ;;
+		esac
+		;;
+	*)
+		echo "mock xcrun: unknown $1" >&2
+		exit 64
+		;;
+esac

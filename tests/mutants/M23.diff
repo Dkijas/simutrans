@@ -1,0 +1,11 @@
+--- a/.github/macos/artifact-lib.sh	2026-11-05 06:02:14.851161051 +0100
++++ b/.github/macos/artifact-lib.sh	2026-11-05 06:02:14.861157133 +0100
+@@ -114,7 +114,7 @@
+ 	# one does not make an AEAD message.
+ 	data_packets=$(grep -E '^:[a-z ]*encrypted[a-z ]*packet:' <<<"$packets" || true)
+ 	count=$(grep -c '^:' <<<"$data_packets" || true)
+-	if [ "$count" -ne 1 ] || ! grep -qE '^:(aead|ocb) encrypted packet:' <<<"$data_packets"; then
++	if ! grep -qE '^:(aead|ocb) encrypted packet:' <<<"$data_packets"; then
+ 		echo "::error::the encrypted container is not an AEAD message."
+ 		echo "::error::gpg produced this instead:"
+ 		printf '%s\n' "$packets" | sed 's/^/::error::  /'

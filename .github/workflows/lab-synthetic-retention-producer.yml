@@ -1,0 +1,191 @@
+#
+# LAB ONLY - NOT PART OF THE PRODUCT.  This branch holds nothing else that can run.
+#
+# Same file name as the workflow on the fork's default branch, because GitHub only
+# offers workflow_dispatch for a file that exists there.  It runs only when dispatched
+# by hand against this branch; a push starts nothing.
+#
+# Every test is synthetic: xcrun, codesign and spctl are simulators, and the only gpg
+# keys are the fixtures in tests/.  There is no `environment:` and no reference to any
+# secret, and the fork's macos-signing environment accepts only its master branch.
+# Nothing here signs, notarizes, publishes or talks to Apple.
+#
+name: LAB macOS signing reliability (synthetic, no secrets)
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+defaults:
+  run:
+    # The system shell, on purpose: production scripts have #!/bin/bash, which is 3.2.
+    shell: /bin/bash --noprofile --norc -eo pipefail {0}
+
+jobs:
+  rehearsal:
+    name: ${{ matrix.arch }} on ${{ matrix.runner }}
+    if: github.repository == 'Dkijas/simutrans' && github.ref == 'refs/heads/lab/macos-signing-reliability-01'
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 150
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { runner: macos-15, arch: arm64 }
+          - { runner: macos-15-intel, arch: x86_64 }
+    env:
+      EXPECT_ARCH: ${{ matrix.arch }}
+      EXPECT_BASH_MAJOR: '3'
+    steps:
+      # actions/checkout v6.0.0
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+        with:
+          persist-credentials: false
+
+      - name: What this runner is
+        run: |
+          mkdir -p out
+          /bin/bash tests/env-report.sh 2>&1 | tee out/env.txt
+
+      - name: Candidate under /bin/bash
+        id: candidate
+        if: always()
+        run: |
+          export PATH="/bin:/usr/bin:$PATH"
+          /bin/bash tests/run-all.sh candidate base 2>&1 | tee out/run-all.txt
+
+      - name: The unpatched base must show the defects
+        id: base
+        if: always()
+        run: |
+          export PATH="/bin:/usr/bin:$PATH"
+          /bin/bash tests/base-repro.sh base 2>&1 | tee out/base-repro.txt
+
+      - name: Negative controls, frozen candidate
+        if: always()
+        run: |
+          export PATH="/bin:/usr/bin:$PATH"
+          JOBS=3 /bin/bash tests/controls.sh candidate mutants 32 2>&1 | tee out/controls.txt
+
+      # Expected to report failures on the frozen candidate: that is the measurement.
+      - name: Strict validator check, frozen candidate (recorded, not a gate)
+        if: always()
+        run: |
+          export PATH="/bin:/usr/bin:$PATH"
+          /bin/bash tests/test-strict.sh candidate 2>&1 | tee out/strict-candidate.txt || true
+
+      - name: candidate-v2 under /bin/bash
+        if: always()
+        run: |
+          export PATH="/bin:/usr/bin:$PATH"
+          /bin/bash tests/run-all.sh candidate-v2 base 2>&1 | tee out/run-all-v2.txt
+          /bin/bash tests/test-strict.sh candidate-v2 2>&1 | tee out/strict-v2.txt
+
+      - name: Negative controls, candidate-v2
+        if: always()
+        run: |
+          export PATH="/bin:/usr/bin:$PATH"
+          JOBS=3 /bin/bash tests/controls.sh candidate-v2 mutants-v2 34 2>&1 | tee out/controls-v2.txt
+
+      - name: Make a container for the other runner
+        if: always()
+        run: |
+          export PATH="/bin:/usr/bin:$PATH"
+          /bin/bash tests/cross-gpg.sh make candidate cross 2>&1 | tee out/cross-make.txt
+
+      # actions/upload-artifact v7.0.1
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        if: always()
+        with:
+          name: results-${{ matrix.arch }}
+          path: out/
+          retention-days: 14
+
+      # actions/upload-artifact v7.0.1
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        if: always()
+        with:
+          name: cross-${{ matrix.arch }}
+          path: cross/
+          retention-days: 14
+          if-no-files-found: error
+
+  cross:
+    name: ${{ matrix.reader }} reads what ${{ matrix.writer }} wrote
+    needs: rehearsal
+    if: always() && github.repository == 'Dkijas/simutrans' && github.ref == 'refs/heads/lab/macos-signing-reliability-01'
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { runner: macos-15, reader: arm64, writer: x86_64 }
+          - { runner: macos-15-intel, reader: x86_64, writer: arm64 }
+    steps:
+      # actions/checkout v6.0.0
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+        with:
+          persist-credentials: false
+      # actions/download-artifact v8.0.1
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+        with:
+          name: cross-${{ matrix.writer }}
+          path: incoming
+      - name: Read it with the candidate
+        run: |
+          export PATH="/bin:/usr/bin:$PATH"
+          mkdir -p out
+          /bin/bash tests/cross-gpg.sh read candidate incoming 2>&1 | tee out/cross-read.txt
+      # actions/upload-artifact v7.0.1
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        if: always()
+        with:
+          name: results-cross-${{ matrix.reader }}
+          path: out/
+          retention-days: 14
+
+  brew-gnupg:
+    name: newest Homebrew gpg on ${{ matrix.arch }}
+    if: github.repository == 'Dkijas/simutrans' && github.ref == 'refs/heads/lab/macos-signing-reliability-01'
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { runner: macos-15, arch: arm64 }
+          - { runner: macos-15-intel, arch: x86_64 }
+    env:
+      EXPECT_BASH_MAJOR: '3'
+    steps:
+      # actions/checkout v6.0.0
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+        with:
+          persist-credentials: false
+      - name: Install the normal Homebrew package
+        run: |
+          mkdir -p out
+          brew install gnupg 2>&1 | tail -5
+          brew upgrade gnupg 2>&1 | tail -3 || true
+          brew info gnupg 2>&1 | head -4 | tee out/brew-gnupg.txt
+          /bin/bash tests/env-report.sh 2>&1 | tee out/env.txt
+      - name: GPG tests with that version, under /bin/bash
+        run: |
+          # /bin first would still find Homebrew's gpg: there is none in /bin or /usr/bin.
+          export PATH="/bin:/usr/bin:$(brew --prefix)/bin:$PATH"
+          gpg --version | head -1 | tee -a out/brew-gnupg.txt
+          /bin/bash tests/test-gpg.sh candidate 2>&1 | tee out/gpg.txt
+          /bin/bash tests/test-rehearsal.sh candidate 2>&1 | tee out/rehearsal.txt
+          /bin/bash tests/test-gpg.sh candidate-v2 2>&1 | tee out/gpg-v2.txt
+          /bin/bash tests/test-rehearsal.sh candidate-v2 2>&1 | tee out/rehearsal-v2.txt
+          /bin/bash tests/test-strict.sh candidate-v2 2>&1 | tee out/strict-v2.txt
+      # actions/upload-artifact v7.0.1
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        if: always()
+        with:
+          name: results-brew-${{ matrix.arch }}
+          path: out/
+          retention-days: 14

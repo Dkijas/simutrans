@@ -1,0 +1,4 @@
+#!/bin/bash
+# Only the BSD form used by verify.sh: stat -f %z <file>
+for file; do :; done
+wc -c < "$file" | tr -d ' '

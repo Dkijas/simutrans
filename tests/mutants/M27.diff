@@ -1,0 +1,11 @@
+--- a/.github/macos/artifact-lib.sh	2026-11-05 06:02:14.990651472 +0100
++++ b/.github/macos/artifact-lib.sh	2026-11-05 06:02:15.001223019 +0100
+@@ -131,7 +131,7 @@
+ 	fi
+ 	# The name has changed once, so the packet tag is what identifies it.
+ 	header=$(awk '/^:(aead|ocb) encrypted packet:/ { print prev } { prev = $0 }' <<<"$packets")
+-	if ! grep -qE '^# off=[0-9]+ ctb=[0-9a-f]+ tag=20 ' <<<"$header"; then
++	if ! grep -qE '^# off=[0-9]+ ctb=[0-9a-f]+ tag=[0-9]+ ' <<<"$header"; then
+ 		echo "::error::the AEAD line does not describe an OpenPGP tag 20 packet:"
+ 		printf '%s\n' "$packets" | sed 's/^/::error::  /'
+ 		return 1

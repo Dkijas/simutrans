@@ -1,0 +1,6 @@
+#!/bin/bash
+# Records the requested wait instead of waiting, unless a test asks for real time.
+echo "$1" >> "$MOCK_DIR/sleeps.log"
+if [ -n "${MOCK_REAL_SLEEP:-}" ]; then
+	exec /bin/sleep "$1"
+fi

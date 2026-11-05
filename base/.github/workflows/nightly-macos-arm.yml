@@ -1,0 +1,37 @@
+name: Nightly build MacOS ARM
+
+on: [push]
+
+jobs:
+  build:
+
+    runs-on: macos-latest
+
+    steps:
+    - uses: actions/checkout@v6
+
+    - name: install_dependencies
+      run: |
+        brew install pkg-config libpng freetype zstd sdl2 fluidsynth
+
+    - name: build
+      run: |
+        cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DSIMUTRANS_UPDATE_LANGFILES=ON ..
+        cmake --build build --target install
+
+    - name: distribute
+      run: |
+        cd build
+        zip -r simumac-nightly.zip simutrans
+
+    # The upload used to be here.  simumac-arm-nightly.zip is now produced by
+    # macos-sign-notarize.yml, which builds the same thing, signs it with a
+    # Developer ID and notarizes it before attaching it.  Two workflows writing
+    # the same asset name on the same push would race, and the unsigned one
+    # would sometimes win.
+    #
+    # This job is kept because it still compiles macOS on macos-latest, which
+    # the signing workflow does not: that one pins macos-15 so the minimum
+    # macOS version of the product cannot drift when GitHub moves the label.
+    # If that coverage is not wanted, delete this workflow rather than leaving
+    # it to build something nobody collects.

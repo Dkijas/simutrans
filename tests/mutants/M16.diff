@@ -1,0 +1,10 @@
+--- a/.github/macos/verify.sh	2026-11-05 06:02:14.587288168 +0100
++++ b/.github/macos/verify.sh	2026-11-05 06:02:14.598792370 +0100
+@@ -29,7 +29,6 @@
+ 
+ HERE=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
+ # shellcheck source=/dev/null
+-. "$HERE/notary-lib.sh"
+ 
+ if [ ! -f "$ZIP" ]; then
+ 	echo "::error::distribution archive not found: $ZIP"

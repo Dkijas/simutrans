@@ -1,0 +1,11 @@
+--- a/.github/macos/artifact-lib.sh	2026-11-05 06:02:16.134202163 +0100
++++ b/.github/macos/artifact-lib.sh	2026-11-05 06:02:16.144462151 +0100
+@@ -124,7 +124,7 @@
+ 		echo "::error::this container is specified to use, so it is refused."
+ 		return 1
+ 	fi
+-	if ! grep -qE "^:(aead|ocb) encrypted packet: cipher=$_ARTIFACT_CIPHER_AES256 aead=$_ARTIFACT_AEAD_OCB cb=[0-9]+\$" <<<"$data_packets"; then
++	if ! grep -qE "^:(aead|ocb) encrypted packet: cipher=[0-9]+ aead=$_ARTIFACT_AEAD_OCB cb=[0-9]+\$" <<<"$data_packets"; then
+ 		echo "::error::unexpected cipher or AEAD mode:"
+ 		printf '%s\n' "$data_packets" | sed 's/^/::error::  /'
+ 		echo "::error::Expected cipher=$_ARTIFACT_CIPHER_AES256 (AES-256) aead=$_ARTIFACT_AEAD_OCB (OCB)."

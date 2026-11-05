@@ -1,0 +1,7 @@
+#!/bin/bash
+echo "codesign $*" >> "$MOCK_DIR/calls.log"
+if [ "$1" = "--verify" ] && [ -f "$MOCK_DIR/codesign.fail" ]; then
+	echo "invalid signature (mock)" >&2
+	exit 1
+fi
+echo "Authority=Developer ID Application (mock)"

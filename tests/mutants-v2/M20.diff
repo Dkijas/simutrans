@@ -1,0 +1,28 @@
+--- a/.github/macos/artifact-lib.sh	2026-11-05 06:02:15.974712816 +0100
++++ b/.github/macos/artifact-lib.sh	2026-11-05 06:02:15.984612704 +0100
+@@ -115,7 +115,7 @@
+ 	data_packets=$(grep -E '^:[a-z ]*encrypted[a-z ]*packet:' <<<"$packets" || true)
+ 	count=$(grep -c '^:' <<<"$packets" || true)
+ 	if [ "$count" -ne 2 ] || ! grep -q '^:symkey enc packet:' <<<"$packets" || \
+-	   ! grep -qE '^:(aead|ocb) encrypted packet:' <<<"$data_packets"; then
++	   ! grep -qE '^:aead encrypted packet:' <<<"$data_packets"; then
+ 		echo "::error::the encrypted container is not an AEAD message."
+ 		echo "::error::gpg produced this instead:"
+ 		printf '%s\n' "$packets" | sed 's/^/::error::  /'
+@@ -124,14 +124,14 @@
+ 		echo "::error::this container is specified to use, so it is refused."
+ 		return 1
+ 	fi
+-	if ! grep -qE "^:(aead|ocb) encrypted packet: cipher=$_ARTIFACT_CIPHER_AES256 aead=$_ARTIFACT_AEAD_OCB cb=[0-9]+\$" <<<"$data_packets"; then
++	if ! grep -qE "^:aead encrypted packet: cipher=$_ARTIFACT_CIPHER_AES256 aead=$_ARTIFACT_AEAD_OCB cb=[0-9]+\$" <<<"$data_packets"; then
+ 		echo "::error::unexpected cipher or AEAD mode:"
+ 		printf '%s\n' "$data_packets" | sed 's/^/::error::  /'
+ 		echo "::error::Expected cipher=$_ARTIFACT_CIPHER_AES256 (AES-256) aead=$_ARTIFACT_AEAD_OCB (OCB)."
+ 		return 1
+ 	fi
+ 	# The name has changed once, so the packet tag is what identifies it.
+-	header=$(awk '/^:(aead|ocb) encrypted packet:/ { print prev } { prev = $0 }' <<<"$packets")
++	header=$(awk '/^:aead encrypted packet:/ { print prev } { prev = $0 }' <<<"$packets")
+ 	if ! grep -qE '^# off=[0-9]+ ctb=[0-9a-f]+ tag=20 ' <<<"$header"; then
+ 		echo "::error::the AEAD line does not describe an OpenPGP tag 20 packet:"
+ 		printf '%s\n' "$packets" | sed 's/^/::error::  /'

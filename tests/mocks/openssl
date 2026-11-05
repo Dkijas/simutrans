@@ -1,0 +1,3 @@
+#!/bin/bash
+# Only: openssl base64 -d -A
+base64 -d

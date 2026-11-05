@@ -1,0 +1,11 @@
+--- a/.github/macos/notary-lib.sh	2026-11-05 06:02:14.161636197 +0100
++++ b/.github/macos/notary-lib.sh	2026-11-05 06:02:14.173300287 +0100
+@@ -201,7 +201,7 @@
+ 		if [ "$attempt" -eq 1 ]; then
+ 			output=$(xcrun stapler "$action" "$target" 2>&1) || rc=$?
+ 		else
+-			output=$(xcrun stapler "$action" -v "$target" 2>&1) || rc=$?
++			output=$(xcrun stapler "$action" "$target" 2>&1) || rc=$?
+ 		fi
+ 		printf '%s\n' "$output"
+ 		if [ "$rc" -eq 0 ]; then

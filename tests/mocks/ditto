@@ -1,0 +1,8 @@
+#!/bin/bash
+# Only: ditto -x -k <zip> <dest>.  Produces a minimal bundle for verify.sh.
+dest=$4
+app="$dest/simutrans/simutrans.app"
+mkdir -p "$app/Contents/MacOS"
+printf '#!/bin/sh\n' > "$app/Contents/MacOS/simutrans"
+chmod +x "$app/Contents/MacOS/simutrans"
+echo plist > "$app/Contents/Info.plist"

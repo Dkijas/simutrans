@@ -1,0 +1,10 @@
+#!/bin/bash
+# Only: plutil -lint <file>, and plutil -extract <key> raw -o - -- <file>
+if [ "$1" = "-lint" ]; then
+	exit 0
+fi
+key=$2
+for file; do :; done
+value=$(sed -n "s/.*\"$key\": *\"\([^\"]*\)\".*/\1/p" "$file" 2>/dev/null | head -1)
+[ -n "$value" ] || exit 1
+printf '%s' "$value"

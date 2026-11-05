@@ -1,0 +1,11 @@
+--- a/.github/macos/artifact-lib.sh	2026-11-05 06:02:16.341775176 +0100
++++ b/.github/macos/artifact-lib.sh	2026-11-05 06:02:16.351751525 +0100
+@@ -172,7 +172,7 @@
+ 			| gpg "${_gpg_common[@]}" --decrypt --output "$out" "$in" 2>/dev/null; then
+ 		rm -f "$out"
+ 		echo "::error::decryption failed: wrong key, or the container has been altered."
+-		return 1
++		return 0
+ 	fi
+ 	return 0
+ }

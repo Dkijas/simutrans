@@ -1,0 +1,38 @@
+name: Nightly build MacOS Intel
+
+on: [push]
+
+jobs:
+  build:
+
+    runs-on: macos-14
+
+    steps:
+    - uses: actions/checkout@v6
+
+    - name: install_dependencies
+      run: |
+        brew install pkg-config libpng freetype zstd sdl2 fluidsynth
+
+    - name: build
+      run: |
+        cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DSIMUTRANS_UPDATE_LANGFILES=ON
+        cmake --build build --target install
+
+    - name: distribute
+      run: |
+        cd build
+        zip -r simumac-nightly.zip simutrans
+
+    # The upload used to be here, and what it uploaded was not Intel.  This
+    # job runs on macos-14, which is Apple Silicon, so every Mach-O in the
+    # archive it published under the name simumac-intel-nightly.zip was arm64.
+    # That was measured on the published archive, not inferred.
+    #
+    # simumac-intel-nightly.zip is now produced by macos-sign-notarize.yml on
+    # macos-15-intel, which is a real x64 runner, and that workflow checks the
+    # architecture of the executable against the name before publishing, so
+    # the same mistake cannot be made silently again.
+    #
+    # This job is kept as a compile check only. If that is not wanted, delete
+    # the workflow rather than leaving it to build something nobody collects.

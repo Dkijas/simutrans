@@ -1,0 +1,11 @@
+--- a/.github/macos/notary-lib.sh	2026-11-05 06:02:15.582776281 +0100
++++ b/.github/macos/notary-lib.sh	2026-11-05 06:02:15.593191697 +0100
+@@ -211,7 +211,7 @@
+ 		class=$(stapler_failure_class "$rc" "$output")
+ 		if [ "$class" != network ] || [ "$attempt" -ge "$STAPLER_MAX_ATTEMPTS" ]; then
+ 			echo "stapler $action: attempt $attempt/$STAPLER_MAX_ATTEMPTS, exit $rc, $class error, result failure"
+-			return "$rc"
++			return 0
+ 		fi
+ 		case "$attempt" in
+ 			1) delay=0 ;;

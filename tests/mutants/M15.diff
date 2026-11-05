@@ -1,0 +1,11 @@
+--- a/.github/macos/verify.sh	2026-11-05 06:02:14.548051270 +0100
++++ b/.github/macos/verify.sh	2026-11-05 06:02:14.558884435 +0100
+@@ -96,7 +96,7 @@
+ # is only useful if it survived being archived.
+ # ---------------------------------------------------------------------------
+ echo "== stapled notarization ticket ============================="
+-if ! stapler_run validate "$app"; then
++if ! xcrun stapler validate "$app"; then
+ 	note_failure "no valid notarization ticket is stapled to the extracted application"
+ fi
+ echo

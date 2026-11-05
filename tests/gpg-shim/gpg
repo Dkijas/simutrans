@@ -1,0 +1,20 @@
+#!/bin/bash
+# In front of the real gpg, for --list-packets only:
+#   GPG_FIXTURE=<file>   print that file instead, exit GPG_FIXTURE_RC (default 0)
+#   GPG_RELABEL=1        real output with the GnuPG >= 2.5.23 packet name
+# Everything else, encryption and decryption included, is the real gpg.
+for a; do
+	if [ "$a" = "--list-packets" ]; then
+		if [ -n "${GPG_FIXTURE:-}" ]; then
+			cat "$GPG_FIXTURE"
+			exit "${GPG_FIXTURE_RC:-0}"
+		fi
+		if [ "${GPG_RELABEL:-0}" = 1 ]; then
+			out=$("$REAL_GPG" "$@")
+			rc=$?
+			printf '%s\n' "$out" | sed 's/^:aead encrypted packet:/:ocb encrypted packet:/'
+			exit "$rc"
+		fi
+	fi
+done
+exec "$REAL_GPG" "$@"

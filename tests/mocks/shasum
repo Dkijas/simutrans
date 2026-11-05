@@ -1,0 +1,7 @@
+#!/bin/bash
+# Only: shasum -a 256 <file>.  macOS has the real one; elsewhere sha256sum does it.
+if [ -x /usr/bin/shasum ]; then
+	exec /usr/bin/shasum "$@"
+fi
+for file; do :; done
+sha256sum "$file"

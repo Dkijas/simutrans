@@ -1,0 +1,10 @@
+--- a/.github/macos/notary-lib.sh	2026-11-05 06:02:14.404889820 +0100
++++ b/.github/macos/notary-lib.sh	2026-11-05 06:02:14.416974122 +0100
+@@ -218,7 +218,6 @@
+ 			2) delay=${SIMU_STAPLER_DELAY_1:-30} ;;
+ 			*) delay=${SIMU_STAPLER_DELAY_2:-120} ;;
+ 		esac
+-		echo "stapler $action: attempt $attempt/$STAPLER_MAX_ATTEMPTS, exit $rc, $class error, retrying in ${delay}s"
+ 		if [ "$delay" -gt 0 ]; then
+ 			sleep "$delay"
+ 		fi

@@ -1,0 +1,11 @@
+--- a/.github/macos/artifact-lib.sh	2026-11-05 06:02:16.267633350 +0100
++++ b/.github/macos/artifact-lib.sh	2026-11-05 06:02:16.279667481 +0100
+@@ -114,7 +114,7 @@
+ 	# container, which is public, is refused here and not left for gpg to catch.
+ 	data_packets=$(grep -E '^:[a-z ]*encrypted[a-z ]*packet:' <<<"$packets" || true)
+ 	count=$(grep -c '^:' <<<"$packets" || true)
+-	if [ "$count" -ne 2 ] || ! grep -q '^:symkey enc packet:' <<<"$packets" || \
++	if [ "$count" -ne 2 ] || \
+ 	   ! grep -qE '^:(aead|ocb) encrypted packet:' <<<"$data_packets"; then
+ 		echo "::error::the encrypted container is not an AEAD message."
+ 		echo "::error::gpg produced this instead:"

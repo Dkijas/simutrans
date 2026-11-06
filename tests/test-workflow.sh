@@ -3,6 +3,11 @@
 # Usage: test-workflow.sh <dir holding .github> [<dir holding the base .github>]
 . "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
 BASE=${2:-}
+if [ -n "$BASE" ]; then
+	# Absolute, because W-11 compares after a cd.  A base that cannot be entered
+	# must fail W-10 to W-12, never skip them.
+	BASE=$(cd "$BASE" 2>/dev/null && pwd) || BASE=$2
+fi
 
 G="$TREE/.github"
 SIGN="$G/workflows/macos-sign-notarize.yml"
@@ -58,7 +63,10 @@ if [ -n "$BASE" ]; then
 	done
 	check W-10 "signing, identity, entitlements and publishing files are byte-identical to base" '[ -z "$unchanged" ]'
 
-	changed=$(cd "$G" && find . -type f | while read -r f; do cmp -s "$f" "$BASE/.github/$f" || echo "$f"; done | sort | tr '\n' ' ')
+	compared=$(cd "$G" && find . -type f | wc -l | tr -d ' ')
+	echo "INFO W-11 compared $compared files against $BASE/.github"
+	changed=$(cd "$G" && find . -type f | while read -r f; do cmp -s "$f" "$BASE/.github/$f" || echo "$f"; done | LC_ALL=C sort | tr '\n' ' ')
+	echo "INFO W-11 differs: $changed"
 	check W-11 "only the five expected files differ from base" \
 		'[ "$changed" = "./macos/artifact-lib.sh ./macos/notarize.sh ./macos/notary-lib.sh ./macos/verify.sh ./workflows/macos-notarize-resume.yml " ]'
 

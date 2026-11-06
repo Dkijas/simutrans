@@ -156,13 +156,13 @@ check G-15 "a truncated container is refused" '[ $RC -ne 0 ] && [ ! -e "$C/c.zip
 
 # ---- attacker data glued to a genuine container, whole decryption path ----------
 . "$TESTS/glued.sh"
-make_glued "$WORK/g"
+make_glued "$WORK/g" || { echo "FATAL could not build the test messages"; exit 3; }
 glued() {
 	new_case
 	rm -f "$WORK/back"
 	(cd "$C/repo" && lib_env bash -c ". .github/macos/artifact-lib.sh; artifact_decrypt '$WORK/g/$2.gpg' '$WORK/back'") > "$C/out" 2>&1
 	RC=$?
-	check "$1" "PRIORITY: refused end to end, no output: $3" '[ $RC -ne 0 ] && [ ! -e "$WORK/back" ]'
+	check "$1" "PRIORITY: refused end to end, no output: $3" '[ $RC -ne 0 ] && [ ! -e "$WORK/back" ] && has "::error::"'
 }
 new_case
 rm -f "$WORK/back"

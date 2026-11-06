@@ -32,4 +32,8 @@ make_glued() {
 	python3 "$TESTS/nest.py" "$d/nest-lit-aead.gpg" "$d/lit.gpg" "$d/ok.gpg" || return 1
 	python3 "$TESTS/nest.py" "$d/nest-aead-lit.gpg" "$d/ok.gpg" "$d/lit.gpg" || return 1
 	python3 "$TESTS/nest.py" "$d/nest-aead.gpg" "$d/ok.gpg" || return 1
+	local f
+	for f in ok lit zipi zipd bare lit-aead aead-lit zipi-aead zipd-aead aead-zipd lit-bare aead-aead nest-lit-aead nest-aead-lit nest-aead; do
+		[ -s "$d/$f.gpg" ] || { echo "make_glued: $f.gpg was not built"; return 1; }
+	done
 }

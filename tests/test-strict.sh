@@ -9,14 +9,14 @@ REAL_GPG=$(command -v gpg)
 export REAL_GPG
 
 new_case
-make_glued "$WORK/g"
+make_glued "$WORK/g" || { echo "FATAL could not build the test messages"; exit 3; }
 
 strict() {
 	new_case
 	(cd "$C/repo" && env PATH="$TESTS/gpg-shim:$TESTS/mocks:$PATH" MOCK_DIR="$MOCK_DIR" RUNNER_TEMP="$C/tmp" \
 		bash -c ". .github/macos/artifact-lib.sh; artifact_assert_aead '$WORK/g/$2.gpg'") > "$C/out" 2>&1
 	RC=$?
-	check "$1" "validator alone refuses: $3" '[ $RC -ne 0 ]'
+	check "$1" "validator alone refuses: $3" '[ $RC -ne 0 ] && has "::error::"'
 }
 new_case
 (cd "$C/repo" && env PATH="$TESTS/gpg-shim:$TESTS/mocks:$PATH" MOCK_DIR="$MOCK_DIR" RUNNER_TEMP="$C/tmp" \

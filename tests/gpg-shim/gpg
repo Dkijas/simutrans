@@ -3,6 +3,7 @@
 #   GPG_FIXTURE=<file>   print that file instead, exit GPG_FIXTURE_RC (default 0)
 #   GPG_RELABEL=1        real output with the GnuPG >= 2.5.23 packet name
 # Everything else, encryption and decryption included, is the real gpg.
+[ -z "${GPG_LOG:-}" ] || echo "$*" >> "$GPG_LOG"
 for a; do
 	if [ "$a" = "--list-packets" ]; then
 		if [ -n "${GPG_FIXTURE:-}" ]; then
